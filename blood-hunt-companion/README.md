@@ -24,21 +24,21 @@ apps/api/                FastAPI backend
     schemas/             Pydantic models for gear, hero, trait, arcana, run
     models/              SQLAlchemy ORM (GearORM)
     routers/             FastAPI route modules (gear)
-    ocr/                 OCR pipeline (preprocess, parse, fuzzy, rarity, templates, pipeline)
+    ocr/                 OCR pipeline (detect, anchors, preprocess, parse, fuzzy,
+                                       rarity, templates, debug, pipeline)
     data_loader.py       reads canonical game JSON
-  tests/                 pytest suite (98 passing as of Phase 2)
+  tests/                 pytest suite
   pyproject.toml
 data/
   game/                  canonical game data (real or seed)
     *.seed.json          bundled seed catalogs (work without FModel)
     _raw/                drop FModel exports here
     _assets/             user-supplied tier-badge / slot-icon PNGs (see _assets/README.md)
-  calibration/           per-resolution OCR bounding boxes
   screenshots/           ingested gear screenshots (gitignored)
+  debug/                 OCR debug-image dumps (gitignored, only when BLOOD_HUNT_OCR_DEBUG=1)
   personal.db            SQLite DB created by `make migrate` (gitignored)
 tools/
   translate_game_data.py FModel raw → canonical JSON
-  ocr_calibration.py     interactive bounding-box calibrator
 Makefile
 ```
 
@@ -103,19 +103,17 @@ curl -X DELETE http://localhost:8000/api/gear/42
 | `PATCH`| `/api/gear/{id}` | Partial update; `extended_effects` replaces the whole list when present |
 | `DELETE`| `/api/gear/{id}` | 204 on success, 404 otherwise |
 
-## OCR ingest setup (one-time per resolution)
+## OCR ingest setup
 
-The `/api/gear/ingest` endpoint needs two things:
+The pipeline is **calibration-free** (per the 2026-04-27 architectural pivot in PROJECT.md §9). Take a full-screen screenshot at any resolution while a gear tooltip is on screen — the pipeline auto-detects the card, anchors regions by proportion, and identifies stats by their text label.
 
-1. **A calibration file** for your screen resolution + UI scale. Generate once:
-   ```bash
-   .venv/bin/python tools/ocr_calibration.py --screenshot path/to/sample_tooltip.png
-   ```
-   Writes `data/calibration/<W>x<H>_<scale_pct>.json`.
+You need:
 
-2. **Tesseract installed** on PATH (`apt install tesseract-ocr`, `brew install tesseract`, or the [Windows installer](https://github.com/UB-Mannheim/tesseract/wiki)). Override the binary location with `BHC_TESSERACT_CMD=/path/to/tesseract`.
+1. **Tesseract installed** on PATH (`apt install tesseract-ocr`, `brew install tesseract`, or the [Windows installer](https://github.com/UB-Mannheim/tesseract/wiki)). Override the binary location with `BHC_TESSERACT_CMD=/path/to/tesseract`.
 
-Optional: drop tier-badge / slot-icon PNGs into `data/game/_assets/` to enable template matching. See [`data/game/_assets/README.md`](./data/game/_assets/README.md). Without these, the pipeline falls back to Tesseract-only for tier letters and a base-effect heuristic for slots.
+2. **Optional template PNGs** at `data/game/_assets/{tier_badges,slot_icons}/*.png` — see [`data/game/_assets/README.md`](./data/game/_assets/README.md). Without these the pipeline falls back to Tesseract-only for tier letters and a base-effect heuristic for slots.
+
+3. **Optional debug dumps**: set `BLOOD_HUNT_OCR_DEBUG=1` and the pipeline writes annotated PNGs of every stage's output to `data/debug/<stage>/`. Invaluable when tuning Stages 1–3 against real screenshots.
 
 ## Database & migrations
 

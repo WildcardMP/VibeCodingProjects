@@ -12,10 +12,7 @@ without the native deps.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    import numpy as np
+from typing import Any
 
 
 def preprocess_for_tesseract(bgr: Any, *, upscale: int = 2) -> Any:
@@ -50,16 +47,16 @@ def preprocess_for_tesseract(bgr: Any, *, upscale: int = 2) -> Any:
     return cv2.bitwise_not(th)
 
 
-def crop(bgr: "np.ndarray", region: tuple[int, int, int, int]) -> "np.ndarray":
+def crop(bgr: Any, region: tuple[int, int, int, int]) -> Any:
     """Crop a (x, y, w, h) region. Bounds-checked; out-of-range returns empty array."""
     import numpy as np
 
     x, y, w, h = region
     if bgr is None or bgr.size == 0:
         return np.zeros((0, 0, 3), dtype=np.uint8)
-    H, W = bgr.shape[:2]
+    img_h, img_w = bgr.shape[:2]
     x0, y0 = max(0, x), max(0, y)
-    x1, y1 = min(W, x + w), min(H, y + h)
+    x1, y1 = min(img_w, x + w), min(img_h, y + h)
     if x1 <= x0 or y1 <= y0:
         return np.zeros((0, 0, *bgr.shape[2:]), dtype=bgr.dtype)
     return bgr[y0:y1, x0:x1].copy()

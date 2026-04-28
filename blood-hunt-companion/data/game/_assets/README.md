@@ -58,13 +58,12 @@ and the runtime crop to a canonical 32×32 grayscale before correlation.
 - **They disagree** → trust the template match, confidence `0.65`, log a warning.
 - **Neither** → confidence `0.0`, surfaced for manual correction in the frontend.
 
-For slot detection: if the calibration includes a `slot_icon` region and a
-matching template is found, slot confidence equals the template-match score
-(0.55–1.0). Otherwise the heuristic fallback returns confidence `0.5`.
+For slot detection: if a matching template is found at the slot-icon anchor
+inside the auto-detected tooltip card, slot confidence equals the template-match
+score (0.55–1.0). Otherwise the heuristic fallback returns confidence `0.5`.
 
 ## What lives here long-term
 
-These images are **per-installation** — they depend on your screen resolution and
-in-game UI scale, the same way the calibration JSON does. They are intentionally
-gitignored (or should be, once you commit any). Treat the directory as a local
-cache the user maintains, not a shared asset bundle.
+These images are **per-installation** — they depend on the textures your local
+client renders. They are gitignored by default; if you do commit them, accept
+they may need to be re-captured after a Marvel Rivals UI patch.

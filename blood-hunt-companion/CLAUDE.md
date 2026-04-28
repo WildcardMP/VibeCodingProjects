@@ -100,10 +100,11 @@ never let it drop. Run `make test` before declaring work done.
 
 ### 3.4 — One concern per module
 
-The OCR pipeline is split into `preprocess`, `parse`, `fuzzy`, `rarity`,
-`calibration`, `pipeline` for a reason: each is independently testable without
-Tesseract or OpenCV in scope. Preserve that split. Same applies to services —
-`damage_calc.py`, `roll_score.py`, `forge_roi.py` stay separate.
+The OCR pipeline is split into `detect`, `anchors`, `preprocess`, `parse`,
+`fuzzy`, `rarity`, `templates`, `debug`, `pipeline` for a reason: each is
+independently testable without Tesseract in scope (and most without OpenCV).
+Preserve that split. Same applies to services — `damage_calc.py`,
+`roll_score.py`, `forge_roi.py` stay separate.
 
 ### 3.5 — Defensive parsing for game data
 
@@ -137,11 +138,9 @@ networked service, you're solving the wrong problem.
 - No emojis unless the user uses one first.
 - When you make a decision, state it once and move on. Don't relitigate.
 
-### 3.10 — Grammar feedback
+### 3.10 — No grammar feedback
 
-The user prefers a brief, optional grammar note at the end of substantive replies
-(spelling exempt). Keep it to one or two bullets, only when there's something
-genuinely worth flagging. Skip on short procedural exchanges.
+Don't append grammar notes to replies. Stick to the technical task.
 
 ---
 
@@ -156,31 +155,35 @@ blood-hunt-companion/
 ├── DATA_PIPELINE.md    ← FModel + OCR implementation guide
 ├── Makefile            ← make install / test / api / extract / lint
 │
-├── apps/api/           ← Python backend (FastAPI, OCR, services)
+├── apps/api/           ← Python backend (FastAPI, OCR, persistence)
+│   ├── alembic.ini             Alembic migration config
+│   ├── alembic/                migrations + env.py
 │   ├── app/
 │   │   ├── main.py             FastAPI entrypoint
-│   │   ├── config.py           paths, env vars, CORS
+│   │   ├── config.py           paths, env vars, CORS, BLOOD_HUNT_OCR_DEBUG
+│   │   ├── db.py               SQLAlchemy engine + session factory
 │   │   ├── data_loader.py      reads canonical or seed game JSON
 │   │   ├── schemas/            Pydantic models (gear, hero, trait, arcana, run)
-│   │   ├── ocr/                preprocess, parse, fuzzy, rarity, calibration, pipeline
-│   │   ├── services/           damage_calc, roll_score, forge_roi  (TODO)
-│   │   ├── routers/            FastAPI route modules                (TODO)
-│   │   └── models/             SQLAlchemy ORM models                (TODO)
-│   └── tests/                  34 tests baseline; growing
+│   │   ├── models/             SQLAlchemy ORM (GearORM)
+│   │   ├── routers/            FastAPI route modules (gear CRUD)
+│   │   ├── services/           damage_calc, roll_score, forge_roi  (TODO Phase 3+)
+│   │   └── ocr/                detect, anchors, preprocess, parse, fuzzy,
+│   │                           rarity, templates, debug, pipeline
+│   └── tests/                  pytest suite (118+ passing)
 │
-├── apps/web/                   ← Next.js frontend                   (TODO)
+├── apps/web/                   ← Next.js frontend                   (TODO Phase 3+)
 │
 ├── data/
 │   ├── game/                   canonical game data
 │   │   ├── *.seed.json         bundled fallback (works without FModel)
-│   │   └── _raw/               drop FModel exports here
-│   ├── calibration/            per-resolution OCR bounding boxes
+│   │   ├── _raw/               drop FModel exports here
+│   │   └── _assets/            user-supplied tier-badge / slot-icon PNGs
 │   ├── screenshots/            ingested gear screenshots (gitignored)
+│   ├── debug/                  OCR debug PNGs (only when BLOOD_HUNT_OCR_DEBUG=1)
 │   └── personal.db             SQLite (gitignored)
 │
 └── tools/
-    ├── translate_game_data.py  FModel raw → canonical JSON
-    └── ocr_calibration.py      interactive bbox calibrator
+    └── translate_game_data.py  FModel raw → canonical JSON
 ```
 
 **Reading order for a fresh session:**
@@ -198,7 +201,6 @@ blood-hunt-companion/
 - Mains **Squirrel Girl** and **Moon Knight** (see RESEARCH.md for current builds).
 - Wants to spend zero time entering gear by hand — the OCR pipeline must work.
 - Prefers concise, direct technical communication.
-- Asks for grammar feedback on his own messages at the end of substantive replies.
 
 **Implication:** Beginner explanations, redundant safety rails, and "let me make
 sure I understand correctly" preamble waste his time. Get to the point.
@@ -226,52 +228,60 @@ Postgres, Redis, a message queue, or any cloud service.
 
 ---
 
-## 7. Active Focus — Phase 2: OCR Calibration & Ingest End-to-End
+## 7. Active Focus — Phase 2: Calibration-Free OCR + Persistence
 
-**Goal:** Drop ten real inventory screenshots; ≥9 parse cleanly without manual
-edits. Gear persists to SQLite. Frontend not required this phase — `curl` against
-`/api/gear/ingest` is acceptable proof.
+**Architectural pivot (2026-04-27):** OCR is calibration-free and content-based.
+See `PROJECT.md` §9 Phase 2 and `PHASE2_OCR_INPUTS.md` for the rationale and the
+user-side capture guide. The pipeline auto-detects the tooltip card on a
+full-screen screenshot, anchors structural regions by **proportion** of the
+detected card, and identifies stats by **fuzzy-matched OCR text**, not position.
+
+**Goal:** the user takes any full-screen screenshot at any resolution; ≥9 of 10
+fixtures parse cleanly without manual correction. Gear persists to SQLite via
+`POST /api/gear/manual`. Frontend not required this phase.
 
 ### 7.1 — Acceptance criteria (Definition of Done for Phase 2)
 
-- [ ] `tools/ocr_calibration.py` produces a working calibration JSON for the
-      user's actual screen resolution (the user runs the tool; you don't have a
-      desktop session).
-- [ ] OCR pipeline accuracy: ≥9/10 fixture screenshots parse with overall
-      confidence ≥0.85 and zero post-edit corrections needed on stat names,
-      tier letters, level, and rarity.
-- [ ] Slot detection works. Replace the temporary `_BASE_TO_SLOT` heuristic in
-      `apps/api/app/ocr/pipeline.py` with template matching against
-      `data/game/_assets/slot_icons/*.png` (icons added by the user).
-- [ ] Tier-letter detection uses the dual strategy (Tesseract + template match).
-      Ship template images under `data/game/_assets/tier_badges/{S,A,B,C,D}.png`.
-- [ ] **`POST /api/gear/manual`** endpoint persists a `ParsedGear` (or hand-edited
-      version) to SQLite. **`GET /api/gear`** lists with filters
-      (hero, slot, rarity, min-confidence). **`PATCH /api/gear/{id}`** edits.
-      **`DELETE /api/gear/{id}`** removes.
-- [ ] SQLAlchemy models live in `apps/api/app/models/`, the schema matches
-      [`PROJECT.md` §7](./PROJECT.md#7-data-models-sqlite-mvp). Use Alembic for
-      migrations from day one — schema will evolve every patch.
-- [ ] Test suite reaches **≥50 tests** with the OCR fixture suite covering all 5
-      rarities and at least 2 stat-name variants per slot.
-- [ ] `make test` is green. `make lint` is green. `make api` boots with no
-      warnings.
+Code-side (Claude can do without user input):
 
-### 7.2 — Recommended sequencing
+- [x] **Persistence layer.** `GearORM`, Alembic-managed migrations, gear CRUD
+      endpoints (`POST /api/gear/manual`, `GET /api/gear`, `GET/PATCH/DELETE
+      /api/gear/{id}`). Schema matches PROJECT.md §7 with the post-pivot
+      `name` and `field_confidences` columns.
+- [x] **Calibration-free OCR pipeline.** Six stages in
+      `app/ocr/{detect,anchors,pipeline}.py` with debug-image dumps under
+      `BLOOD_HUNT_OCR_DEBUG=1`. `TooltipNotFound` → 422 from `/api/gear/ingest`.
+- [x] **Tier-letter dual strategy** (Tesseract + template match) with graceful
+      fallback when `data/game/_assets/tier_badges/` is empty.
+- [x] **Slot detection** via template match at the slot-icon anchor; falls back
+      to a base-effect heuristic when templates are missing.
+- [x] `make test` green, `make lint` green, `make api` boots clean. Test count
+      grows past 110 with the new OCR module tests; aim higher as fixtures land.
 
-1. **SQLAlchemy + Alembic + persistence** first. Without storage the OCR pipeline
-   is a toy. ~½ day.
-2. **Tier-badge template matching.** Add `_assets/tier_badges/` images, replace the
-   "default to D" fallback in `pipeline.py::_classify_tier_letter` with a real
-   `cv2.matchTemplate` scoring function. ~½ day.
-3. **Slot-icon template matching.** Same pattern, replaces `_BASE_TO_SLOT`. ~½ day.
-4. **Gear CRUD endpoints.** Routers under `apps/api/app/routers/gear.py`, wired
-   from `main.py`. ~½ day.
-5. **Fixture-driven OCR regression tests.** Add 10+ real screenshots under
-   `apps/api/tests/fixtures/screenshots/` with hand-labeled `expected.json` per
-   fixture. Drive a parametrized test that asserts ≥90% field accuracy. ~1 day.
-6. **Calibration UX polish.** Improve `tools/ocr_calibration.py` if step 5 surfaces
-   pain points. ~½ day, only if needed.
+User-side (gated on captures per PHASE2_OCR_INPUTS.md):
+
+- [ ] Tier badge PNGs at `data/game/_assets/tier_badges/{S,A,B,C,D}.png`.
+- [ ] Slot icon PNGs at `data/game/_assets/slot_icons/{weapon,armor,accessory,exclusive}.png`.
+- [ ] ≥10 fixtures under `apps/api/tests/fixtures/ocr/fixture_NN/` with
+      `screenshot.png` + ground-truth `expected.json`.
+
+Tuning (Claude does this once user-side inputs land):
+
+- [ ] `test_ocr_fixtures.py` reaches ≥9/10 pass rate at `TARGET_PASS_RATE=0.9`.
+- [ ] Per-fixture pass/fail report at `apps/api/tests/fixtures/ocr/README.md`.
+
+### 7.2 — Tuning workflow (when fixtures land)
+
+1. Run `BLOOD_HUNT_OCR_DEBUG=1 py -m pytest apps/api/tests/test_ocr_fixtures.py
+   -k fixture_01 -s` — produces annotated stage dumps under `data/debug/`.
+2. Eyeball the dumps. Stage 1 misalignment (`detect/canny_choice.png`) → tune
+   `MIN_AREA_FRACTION` / `ASPECT_*` in `detect.py`. Stage 2 wrong region
+   (`anchors/regions.png`) → adjust `_PROPORTIONS` in `anchors.py`. Stage 3
+   wrong row count (`anchors/rows.png`) → adjust `_INK_FRAC_THRESHOLD` /
+   `_MIN_ROW_HEIGHT_FRAC`.
+3. Run all fixtures. Repeat until ≥9 pass.
+4. Lock in by writing `apps/api/tests/fixtures/ocr/README.md` with per-fixture
+   pass/fail and a one-line "what tuning changed."
 
 ### 7.3 — Out of scope for Phase 2
 
@@ -311,7 +321,10 @@ order is:
    extraction yet — point them at DATA_PIPELINE.md §3 (Patch-Day Runbook).
 2. Did a `DT_*` UAsset get renamed? Check the FModel asset tree for the keyword
    and update the candidate list in `tools/translate_game_data.py`.
-3. Did the inventory UI shift? Re-run `tools/ocr_calibration.py`.
+3. Did the tooltip UI shift (border style, anchor proportions, badge artwork)?
+   Re-capture `data/game/_assets/{tier_badges,slot_icons}/*.png` and re-tune
+   `app/ocr/anchors.py::_PROPORTIONS` against fresh fixtures. Use
+   `BLOOD_HUNT_OCR_DEBUG=1` to inspect every stage's intermediate output.
 
 Almost every "the app broke" issue lives in those three buckets.
 
@@ -397,15 +410,18 @@ over.
 | Understand the mode and meta | `RESEARCH.md` |
 | Add a new feature | `PROJECT.md` §3, §9 |
 | Refresh game data after a patch | `DATA_PIPELINE.md` §3 |
-| Calibrate OCR for a new resolution | `tools/ocr_calibration.py` + `DATA_PIPELINE.md` §2.2 |
+| Capture OCR inputs (templates + fixtures) | `PHASE2_OCR_INPUTS.md` |
+| Tune Stage 1–3 against new fixtures | `app/ocr/{detect,anchors}.py` + `BLOOD_HUNT_OCR_DEBUG=1` |
 | Add a Tesseract preprocessing step | `apps/api/app/ocr/preprocess.py` |
 | Add a stat | extend `data/game/_raw/DT_GearStats.json` then `make extract` |
 | Run tests | `make test` |
 | Boot the API | `make api` |
+| Apply DB migrations | `make migrate` |
 | Translate raw FModel exports | `make extract` |
 | Find the active to-do | §7.1 of this file |
 
 ---
 
-*Last updated: Phase 1 skeleton complete. 34 tests passing. Phase 2 (OCR Ingest
-End-to-End) is the active focus per §7.*
+*Last updated: Phase 2 partially complete. Calibration-free OCR pipeline lands;
+persistence layer + CRUD shipped. Awaiting user-supplied template PNGs and
+fixture screenshots to enable the accuracy gate.*

@@ -1,19 +1,28 @@
-"""OCR pipeline: screenshot → ParsedGear.
+"""OCR pipeline: full-screen screenshot → ParsedGear.
+
+The pipeline is **calibration-free** (per the 2026-04-27 architecture pivot).
+The user takes a full-screen screenshot whenever a gear tooltip is on screen;
+the pipeline auto-detects the tooltip card, anchors structural regions by
+proportion, segments rows by whitespace, and identifies stats by their text
+label rather than position.
 
 Modules:
     preprocess.py — OpenCV image cleanup before Tesseract.
     parse.py      — regex helpers (numeric values, level, percent).
     fuzzy.py      — rapidfuzz wrapper over the stat-name catalog.
     rarity.py     — color-based rarity classification.
-    calibration.py— load resolution-specific bounding-box JSON.
-    pipeline.py   — orchestrator that wires everything together.
+    templates.py  — template matching for tier badges and slot icons.
+    detect.py     — Stage 1: locate the tooltip card on the full screenshot.
+    anchors.py    — Stages 2 & 3: proportional anchor regions + row segmentation.
+    debug.py      — annotated debug-image dumps, gated on BLOOD_HUNT_OCR_DEBUG.
+    pipeline.py   — orchestrator that chains all six stages.
 
 The split exists so each piece is independently testable. Tesseract and OpenCV
-are heavy native dependencies; we keep a thin abstraction that lets unit tests
-mock them out.
+are heavy native dependencies; lazy imports keep unit tests cheap.
 """
 
-from .calibration import Calibration, load_calibration
+from .anchors import CardAnchors, segment_rows
+from .detect import DetectedCard, TooltipNotFound, detect_tooltip
 from .fuzzy import normalize_stat
 from .parse import parse_level, parse_percent
 from .pipeline import parse_gear_screenshot
@@ -21,12 +30,15 @@ from .preprocess import preprocess_for_tesseract
 from .rarity import classify_rarity_by_color
 
 __all__ = [
-    "Calibration",
+    "CardAnchors",
+    "DetectedCard",
+    "TooltipNotFound",
     "classify_rarity_by_color",
-    "load_calibration",
+    "detect_tooltip",
     "normalize_stat",
     "parse_gear_screenshot",
     "parse_level",
     "parse_percent",
     "preprocess_for_tesseract",
+    "segment_rows",
 ]

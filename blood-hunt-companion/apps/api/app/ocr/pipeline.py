@@ -1,35 +1,66 @@
-"""End-to-end OCR pipeline: a screenshot path → ParsedGear.
+"""Calibration-free OCR orchestrator: full-screen screenshot → ParsedGear.
 
-This module is the only one in `app.ocr` that imports Tesseract (`pytesseract`).
-We import lazily so unit tests that hit `parse.py` / `fuzzy.py` / `rarity.py` don't
-require Tesseract installed.
+Pipeline (per 2026-04-27 architectural pivot, see PROJECT.md §9 Phase 2):
+
+    Stage 1 — `detect.detect_tooltip`        : locate the tooltip card on screen.
+    Stage 2 — `anchors.compute_anchors`      : proportional regions inside the card.
+    Stage 3 — `anchors.segment_rows`         : whitespace-based row segmentation.
+    Stage 4 — `_extract_row` (this module)   : OCR each row, fuzzy-match label,
+                                                template-match tier.
+    Stage 5 — `_extract_top` (this module)   : item name, rarity, level, slot.
+    Stage 6 — `_assemble` (this module)      : build ParsedGear + field_confidences.
+
+Position-based stat identification is gone. **Stat identity comes from the
+fuzzy-matched OCR text**, so a stat that's row-1 in one screenshot and row-3
+in another lands at the right `stat_id` either way.
+
+This module is the only one that imports `pytesseract`; tests for upstream
+modules (fuzzy, parse, templates, detect, anchors) don't need Tesseract on PATH.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
-from statistics import mean
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..config import settings
 from ..schemas.common import GearSlot, Rarity, TierLetter
 from ..schemas.gear import ExtendedEffect, ParsedGear
-from .calibration import Calibration
+from .anchors import CardAnchors, Region, compute_anchors, crop, segment_rows
+from .debug import dump_image
+from .detect import DetectedCard, TooltipNotFound, crop_card, detect_tooltip
 from .fuzzy import normalize_stat
 from .parse import extract_stat_name, parse_level, parse_percent
-from .preprocess import crop, preprocess_for_tesseract
+from .preprocess import preprocess_for_tesseract
 from .rarity import classify_rarity_by_color
 from .templates import match_slot, match_tier
 
-if TYPE_CHECKING:
-    import numpy as np  # noqa: F401
-
 log = logging.getLogger(__name__)
 
+# Tesseract page-segmentation configs.
+_NUM_CONFIG = "--psm 7 -c tessedit_char_whitelist=0123456789+-.,%Lvl "
+_TEXT_CONFIG = "--psm 7"
+_TIER_CONFIG = "--psm 10 -c tessedit_char_whitelist=SABCD"
 
+# Confidence below this threshold is flagged for user review (CLAUDE.md §3.6).
+_REVIEW_THRESHOLD = 0.7
+
+# Confidence values for tier dual strategy (DATA_PIPELINE §2.7).
+_TIER_CONF_BOTH_AGREE = 1.0
+_TIER_CONF_SINGLE = 0.65
+_TIER_CONF_NONE = 0.0
+
+# Fallback slot when nothing identifies one (template match miss + no heuristic
+# hit on the base effect). Frontend will flag low confidence.
+_DEFAULT_SLOT: GearSlot = "armor"
+
+
+# ---------------------------------------------------------------------------
+# Asset directories (template PNGs the user supplies)
+# ---------------------------------------------------------------------------
 def _assets_dir() -> Path:
-    """Root for user-supplied template assets (tier badges, slot icons)."""
     return settings().game_data_dir / "_assets"
 
 
@@ -41,21 +72,41 @@ def _slot_templates_dir() -> Path:
     return _assets_dir() / "slot_icons"
 
 
-# Confidence values for the dual tier-detection strategy. See DATA_PIPELINE §2.7.
-# 0.65 keeps "single-method" inside the yellow band (≥0.6) defined in CLAUDE.md §3.6.
-_TIER_CONF_BOTH_AGREE = 1.0
-_TIER_CONF_SINGLE = 0.65
-_TIER_CONF_NONE = 0.0
+# ---------------------------------------------------------------------------
+# Internal data classes
+# ---------------------------------------------------------------------------
+@dataclass
+class ExtractedRow:
+    """One extended-effect row after OCR + matching. Stage 4 output."""
+
+    stat_name: str
+    value: float
+    tier: TierLetter
+    raw_text: str
+    confidence: dict[str, float] = field(default_factory=dict)
+
+    def overall(self) -> float:
+        """The row is only as trustworthy as its weakest field (CLAUDE.md §3.6)."""
+        return min(self.confidence.values()) if self.confidence else 0.0
 
 
-# Tesseract page-segmentation configs.
-NUM_CONFIG = "--psm 7 -c tessedit_char_whitelist=0123456789+-.,%Lvl "
-TEXT_CONFIG = "--psm 7"
-TIER_CONFIG = "--psm 10 -c tessedit_char_whitelist=SABCD"
+@dataclass
+class TopOfCard:
+    """Stage 5 output — top-band fields with per-field confidence."""
+
+    name: str | None
+    rarity: Rarity
+    level: int
+    slot: GearSlot
+    base_effect: str
+    base_value: float
+    field_confidences: dict[str, float]
 
 
+# ---------------------------------------------------------------------------
+# Tesseract helpers
+# ---------------------------------------------------------------------------
 def _tesseract_cmd_set() -> None:
-    """Honour BHC_TESSERACT_CMD if set."""
     cmd = settings().tesseract_cmd
     if cmd:
         import pytesseract
@@ -79,12 +130,11 @@ def _read_image(path: str) -> Any:
     return img
 
 
+# ---------------------------------------------------------------------------
+# Tier reconciliation (Tesseract + template match)
+# ---------------------------------------------------------------------------
 def _classify_tier_letter(text: str) -> TierLetter | None:
-    """Pick a single S/A/B/C/D letter from Tesseract output.
-
-    Tesseract on a single character with `--psm 10` often emits the letter alone,
-    sometimes with a stray punctuation mark — strip and match.
-    """
+    """Pick a single S/A/B/C/D letter from Tesseract output."""
     if not text:
         return None
     cleaned = "".join(ch for ch in text if ch.isalpha()).upper()
@@ -102,16 +152,10 @@ def resolve_tier(
 ) -> tuple[TierLetter | None, float]:
     """Reconcile Tesseract output with template-match output for a tier badge.
 
-    Strategy (per DATA_PIPELINE.md §2.7):
-        - Both methods agree → confidence 1.0
-        - Only one method returned a letter → confidence 0.65 (yellow band)
-        - Neither → (None, 0.0); caller must surface for manual correction
-        - Methods disagree → trust the template match (more robust at small sizes)
-          and report 0.65 confidence; the discrepancy is logged.
-
-    `templates_dir` is the directory of `{S,A,B,C,D}.png`. When None, falls back
-    to `<game_data_dir>/_assets/tier_badges/`. Missing directories degrade to
-    Tesseract-only without raising.
+    - Both methods agree → confidence 1.0.
+    - Only one method has a hit → confidence 0.65 (yellow band).
+    - Methods disagree → trust the template match, confidence 0.65.
+    - Neither → (None, 0.0); caller defaults the row tier and flags red.
     """
     tess_letter = _classify_tier_letter(tesseract_text)
     tdir = templates_dir if templates_dir is not None else _tier_templates_dir()
@@ -133,121 +177,11 @@ def resolve_tier(
     return None, _TIER_CONF_NONE
 
 
-def resolve_slot(
-    img: Any,
-    calibration: Calibration,
-    base_effect: str,
-    *,
-    templates_dir: Path | None = None,
-) -> tuple[GearSlot, float]:
-    """Pick a slot for a gear piece using the strongest available signal.
-
-    1. If the calibration has a `slot_icon` region AND template assets are present,
-       run a template match — confidence = match score (0.55..1.0).
-    2. Otherwise fall back to the base-effect heuristic — confidence 0.5
-       (yellow/red boundary, since the heuristic is genuinely uncertain).
-    """
-    sdir = templates_dir if templates_dir is not None else _slot_templates_dir()
-    if calibration.regions.slot_icon is not None:
-        slot_crop = crop(img, calibration.regions.slot_icon)
-        match = match_slot(slot_crop, sdir)
-        if match is not None:
-            return match
-    return _heuristic_slot(base_effect), 0.5
-
-
-def parse_gear_screenshot(
-    image_path: str,
-    calibration: Calibration,
-    stat_catalog: list[str],
-    *,
-    hero_id: str | None = None,
-) -> ParsedGear:
-    """Parse a single tooltip screenshot into a `ParsedGear`.
-
-    Args:
-        image_path: filesystem path to the screenshot (PNG/JPG).
-        calibration: bounding boxes for the user's resolution.
-        stat_catalog: list of canonical stat display names from `gear_stats.json`.
-        hero_id: optional — if the user already knows which hero this is for, pass it
-                 through so the simulator can use hero-specific scoring.
-
-    Returns a `ParsedGear` with per-field confidences. Caller is expected to surface
-    low-confidence fields for human review before persisting.
-    """
-    img = _read_image(image_path)
-    regs = calibration.regions
-
-    # Rarity by color (most reliable signal we have).
-    rarity: Rarity = classify_rarity_by_color(crop(img, regs.rarity_badge))
-
-    # Level
-    level_text = _ocr(preprocess_for_tesseract(crop(img, regs.level)), NUM_CONFIG)
-    level = parse_level(level_text) or 1
-
-    # Base effect (e.g. "Total Output Boost +1234%")
-    base_text = _ocr(preprocess_for_tesseract(crop(img, regs.base_effect)), TEXT_CONFIG)
-    base_name_raw = extract_stat_name(base_text)
-    base_name, base_score = normalize_stat(base_name_raw, stat_catalog)
-    base_value = parse_percent(base_text) or 0.0
-
-    # Extended effects (1–4 rows depending on rarity)
-    extended: list[ExtendedEffect] = []
-    confidences: list[float] = [base_score / 100.0]
-    for region in regs.extended_effects:
-        stat_text = _ocr(preprocess_for_tesseract(crop(img, region.stat)), TEXT_CONFIG)
-        if not stat_text.strip():
-            continue
-        tier_crop = crop(img, region.tier)
-        tier_text = _ocr(preprocess_for_tesseract(tier_crop), TIER_CONFIG)
-        stat_name_raw = extract_stat_name(stat_text)
-        stat_name, score = normalize_stat(stat_name_raw, stat_catalog)
-        tier_letter, tier_conf = resolve_tier(tier_crop, tier_text)
-        # Conservative default when no signal at all — frontend will flag it red.
-        tier_value: TierLetter = tier_letter if tier_letter is not None else "D"
-        value = parse_percent(stat_text) or 0.0
-        # Per-row confidence is the min of stat-name confidence and tier confidence:
-        # the row is only as trustworthy as its weakest field.
-        row_confidence = min(score / 100.0, tier_conf)
-        ext = ExtendedEffect(
-            stat_id=stat_name,
-            tier=tier_value,
-            value=value,
-            raw_text=stat_text,
-            confidence=row_confidence,
-        )
-        extended.append(ext)
-        confidences.append(ext.confidence)
-
-    overall = float(mean(confidences)) if confidences else 0.0
-
-    # Slot resolution: slot-icon template match if calibrated and assets present;
-    # otherwise fall back to a base-effect heuristic. Either way, the frontend lets
-    # the user override before save.
-    slot, _slot_conf = resolve_slot(img, calibration, base_name)
-
-    parsed = ParsedGear(
-        slot=slot,
-        hero_id=hero_id,
-        rarity=rarity,
-        level=level,
-        base_effect=base_name,
-        base_value=base_value,
-        extended_effects=extended,
-        overall_confidence=overall,
-        source_screenshot=str(Path(image_path).resolve()),
-    )
-    log.info(
-        "Parsed gear: slot=%s rarity=%s level=%d base=%s ext=%d conf=%.2f",
-        parsed.slot, parsed.rarity, parsed.level, parsed.base_effect,
-        len(parsed.extended_effects), parsed.overall_confidence,
-    )
-    return parsed
-
-
-# Crude slot inference used as a fallback when slot-icon template matching fails
-# (e.g., the user hasn't supplied tier/slot template assets yet). Maps a base-effect
-# stat name to the slot that most commonly hosts it per RESEARCH.md §3.
+# ---------------------------------------------------------------------------
+# Slot resolution (template match + base-effect heuristic)
+# ---------------------------------------------------------------------------
+# Heuristic mapping used when slot template matching has no hit. Maps a base
+# effect's stat name to the slot that most commonly hosts it (RESEARCH.md §3).
 _BASE_TO_SLOT: dict[str, GearSlot] = {
     "Total Output Boost": "armor",
     "Total Damage Bonus": "armor",
@@ -265,4 +199,280 @@ _BASE_TO_SLOT: dict[str, GearSlot] = {
 
 
 def _heuristic_slot(base_effect: str) -> GearSlot:
-    return _BASE_TO_SLOT.get(base_effect, "armor")
+    return _BASE_TO_SLOT.get(base_effect, _DEFAULT_SLOT)
+
+
+def resolve_slot(
+    card_bgr: Any,
+    anchors: CardAnchors,
+    base_effect: str,
+    *,
+    templates_dir: Path | None = None,
+) -> tuple[GearSlot, float]:
+    """Pick the slot using the strongest available signal.
+
+    1. Template match against `slot_icons/*.png` on the slot-icon anchor.
+       Confidence = match score (0.55..1.0).
+    2. Base-effect heuristic. Confidence = 0.5 (yellow/red boundary; the
+       heuristic is genuinely uncertain).
+    """
+    sdir = templates_dir if templates_dir is not None else _slot_templates_dir()
+    slot_crop = crop(card_bgr, anchors.slot_icon)
+    match = match_slot(slot_crop, sdir)
+    if match is not None:
+        return match
+    return _heuristic_slot(base_effect), 0.5
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — row content extraction
+# ---------------------------------------------------------------------------
+def _extract_row(
+    extended_bgr: Any,
+    row_y: tuple[int, int],
+    stat_catalog: list[str],
+    *,
+    tier_templates: Path | None = None,
+) -> ExtractedRow | None:
+    """Extract stat label + value + tier from one row of the extended-effects block.
+
+    Returns None when the row OCR is empty (treat as no extended effect).
+    """
+    import numpy as np
+
+    arr = np.asarray(extended_bgr)
+    region_w = arr.shape[1]
+    y0, y1 = row_y
+    row_img = arr[y0:y1, :]
+    if row_img.size == 0:
+        return None
+
+    # Left ~70% holds the stat label + value; right ~30% holds the tier badge.
+    text_w = int(round(region_w * 0.7))
+    text_img = row_img[:, :text_w]
+    tier_img = row_img[:, text_w:]
+
+    text_raw = _ocr(preprocess_for_tesseract(text_img), _TEXT_CONFIG)
+    if not text_raw.strip():
+        return None
+    stat_raw = extract_stat_name(text_raw)
+    stat_name, stat_score = normalize_stat(stat_raw, stat_catalog)
+    value = parse_percent(text_raw) or 0.0
+
+    tier_text_raw = _ocr(preprocess_for_tesseract(tier_img), _TIER_CONFIG)
+    tier_letter, tier_conf = resolve_tier(
+        tier_img, tier_text_raw, templates_dir=tier_templates
+    )
+    tier_value: TierLetter = tier_letter if tier_letter is not None else "D"
+
+    return ExtractedRow(
+        stat_name=stat_name,
+        value=value,
+        tier=tier_value,
+        raw_text=text_raw,
+        confidence={
+            "stat_name": min(stat_score / 100.0, 1.0),
+            "tier": tier_conf,
+            "value": 1.0 if value > 0 else 0.5,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 5 — top-of-card extraction
+# ---------------------------------------------------------------------------
+def _extract_top(
+    card_bgr: Any,
+    anchors: CardAnchors,
+    stat_catalog: list[str],
+    *,
+    detection_confidence: float,
+    slot_templates: Path | None = None,
+) -> TopOfCard:
+    name_raw = _ocr(preprocess_for_tesseract(crop(card_bgr, anchors.name)), _TEXT_CONFIG)
+    name = name_raw.strip() or None
+    name_conf = 0.85 if name else 0.0
+
+    rarity = classify_rarity_by_color(crop(card_bgr, anchors.rarity_badge))
+    rarity_conf = 0.9  # color match is usually unambiguous
+
+    level_raw = _ocr(preprocess_for_tesseract(crop(card_bgr, anchors.level)), _NUM_CONFIG)
+    level = parse_level(level_raw) or 1
+    level_conf = 0.9 if parse_level(level_raw) is not None else 0.4
+
+    base_raw = _ocr(
+        preprocess_for_tesseract(crop(card_bgr, anchors.base_effect)), _TEXT_CONFIG
+    )
+    base_name_raw = extract_stat_name(base_raw)
+    base_effect, base_score = normalize_stat(base_name_raw, stat_catalog)
+    base_value = parse_percent(base_raw) or 0.0
+    base_conf = min(base_score / 100.0, 1.0)
+
+    slot, slot_conf = resolve_slot(
+        card_bgr, anchors, base_effect, templates_dir=slot_templates
+    )
+
+    confidences = {
+        "name": name_conf,
+        "rarity": rarity_conf,
+        "level": level_conf,
+        "slot": slot_conf,
+        "base_effect": base_conf,
+        "base_value": base_conf,  # value confidence shares the row OCR's score
+        "detection": detection_confidence,
+    }
+
+    return TopOfCard(
+        name=name,
+        rarity=rarity,
+        level=level,
+        slot=slot,
+        base_effect=base_effect,
+        base_value=base_value,
+        field_confidences=confidences,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage 6 — assembly
+# ---------------------------------------------------------------------------
+def _assemble(
+    image_path: str,
+    hero_id: str | None,
+    top: TopOfCard,
+    rows: list[ExtractedRow],
+) -> ParsedGear:
+    extended = [
+        ExtendedEffect(
+            stat_id=r.stat_name,
+            tier=r.tier,
+            value=r.value,
+            raw_text=r.raw_text,
+            confidence=r.overall(),
+        )
+        for r in rows
+    ]
+    # Overall confidence = mean of every per-field score we have, plus per-row
+    # overalls. Geometric mean would penalise any single weak field harder, but
+    # the simple mean tracks how the frontend's three-band coloring will read.
+    all_scores = list(top.field_confidences.values()) + [r.overall() for r in rows]
+    overall = sum(all_scores) / len(all_scores) if all_scores else 0.0
+
+    return ParsedGear(
+        name=top.name,
+        slot=top.slot,
+        hero_id=hero_id,
+        rarity=top.rarity,
+        level=top.level,
+        base_effect=top.base_effect,
+        base_value=top.base_value,
+        extended_effects=extended,
+        overall_confidence=overall,
+        field_confidences=top.field_confidences,
+        source_screenshot=str(Path(image_path).resolve()),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public entrypoint
+# ---------------------------------------------------------------------------
+def parse_gear_screenshot(
+    image_path: str,
+    stat_catalog: list[str],
+    *,
+    hero_id: str | None = None,
+    tier_templates_dir: Path | None = None,
+    slot_templates_dir: Path | None = None,
+) -> ParsedGear:
+    """Parse a full-screen screenshot containing a gear tooltip.
+
+    Args:
+        image_path: filesystem path to the screenshot.
+        stat_catalog: list of canonical stat display names from `gear_stats.json`.
+        hero_id: optional pre-known hero id; passed through to the result so the
+            simulator and roll-evaluator can use hero-specific scoring.
+        tier_templates_dir: override for tier-badge PNGs (defaults to
+            `data/game/_assets/tier_badges/`).
+        slot_templates_dir: override for slot-icon PNGs (defaults to
+            `data/game/_assets/slot_icons/`).
+
+    Returns:
+        A `ParsedGear` with `field_confidences` populated. Per-row confidences
+        live on each `ExtendedEffect`.
+
+    Raises:
+        TooltipNotFound: if Stage 1 cannot locate a tooltip on the screenshot.
+            The `/api/gear/ingest` endpoint translates this to HTTP 422.
+    """
+    img = _read_image(image_path)
+
+    card = detect_tooltip(img)  # Stage 1 — raises TooltipNotFound on miss
+    card_bgr = crop_card(img, card)
+    dump_image("pipeline", "card_crop", card_bgr)
+
+    anchors = compute_anchors(card_bgr)  # Stage 2
+    extended_region = crop(card_bgr, anchors.extended_effects)
+    row_bands = segment_rows(extended_region)  # Stage 3
+
+    top = _extract_top(  # Stage 5
+        card_bgr,
+        anchors,
+        stat_catalog,
+        detection_confidence=card.confidence,
+        slot_templates=slot_templates_dir,
+    )
+
+    rows: list[ExtractedRow] = []  # Stage 4
+    for band in row_bands:
+        row = _extract_row(
+            extended_region,
+            band,
+            stat_catalog,
+            tier_templates=tier_templates_dir,
+        )
+        if row is not None:
+            rows.append(row)
+
+    parsed = _assemble(image_path, hero_id, top, rows)  # Stage 6
+    log.info(
+        "parsed gear: name=%s slot=%s rarity=%s level=%d base=%s ext=%d overall=%.2f",
+        parsed.name, parsed.slot, parsed.rarity, parsed.level,
+        parsed.base_effect, len(parsed.extended_effects), parsed.overall_confidence,
+    )
+    return parsed
+
+
+# ---------------------------------------------------------------------------
+# Helpers exposed for tests
+# ---------------------------------------------------------------------------
+def fields_below_review_threshold(parsed: ParsedGear) -> list[str]:
+    """Return field names whose confidence is below the review threshold.
+
+    The frontend uses this to decide which fields to flag yellow/red. Tests use
+    it to verify the threshold logic without coupling to the UI.
+    """
+    flagged = [
+        name
+        for name, conf in parsed.field_confidences.items()
+        if conf < _REVIEW_THRESHOLD
+    ]
+    flagged.extend(
+        f"extended_effects[{i}]"
+        for i, e in enumerate(parsed.extended_effects)
+        if e.confidence < _REVIEW_THRESHOLD
+    )
+    return flagged
+
+
+# Re-exports for backwards compatibility with downstream tests.
+__all__ = [
+    "DetectedCard",
+    "ExtractedRow",
+    "Region",
+    "TooltipNotFound",
+    "TopOfCard",
+    "fields_below_review_threshold",
+    "parse_gear_screenshot",
+    "resolve_slot",
+    "resolve_tier",
+]

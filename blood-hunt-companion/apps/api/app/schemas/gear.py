@@ -23,8 +23,16 @@ class ExtendedEffect(BaseModel):
 
 class ParsedGear(BaseModel):
     """OCR output before persistence. The frontend reviews this, the user can edit
-    any field, then a `POST /api/gear/manual` (or auto-save) commits it as a `GearPiece`."""
+    any field, then a `POST /api/gear/manual` (or auto-save) commits it as a `GearPiece`.
 
+    `field_confidences` is a parallel dict mirroring the schema: each top-level
+    field name maps to a 0..1 confidence score from the OCR pipeline. Per-row
+    `ExtendedEffect.confidence` covers the extended-effects list. The frontend
+    uses these to color fields green (≥0.85) / yellow (0.6–0.85) / red (<0.6)
+    per CLAUDE.md §3.6.
+    """
+
+    name: str | None = None  # item display name from OCR (nullable until ground truth lands)
     slot: GearSlot
     hero_id: str | None = None  # nullable: some legendaries are universal
     rarity: Rarity
@@ -33,6 +41,7 @@ class ParsedGear(BaseModel):
     base_value: float
     extended_effects: list[ExtendedEffect] = Field(default_factory=list, max_length=4)
     overall_confidence: float = Field(ge=0.0, le=1.0, default=0.0)
+    field_confidences: dict[str, float] = Field(default_factory=dict)
     source_screenshot: str = ""
 
 
@@ -53,6 +62,7 @@ class GearPatch(BaseModel):
     to explicitly clear hero binding, omit it to leave the existing binding alone.
     """
 
+    name: str | None = None
     slot: str | None = None
     hero_id: str | None = None
     rarity: str | None = None

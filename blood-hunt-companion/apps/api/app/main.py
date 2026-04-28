@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import settings
 from .data_loader import load_game_data, stat_catalog
-from .ocr.calibration import load_calibration
+from .ocr.detect import TooltipNotFound
 from .ocr.pipeline import parse_gear_screenshot
 from .routers import gear as gear_router
 from .schemas.gear import ParsedGear
@@ -90,15 +90,16 @@ def list_gear_stats() -> list[dict[str, object]]:
 @app.post("/api/gear/ingest", response_model=ParsedGear)
 async def ingest_gear(
     file: Annotated[UploadFile, File(...)],
-    width: int = 3840,
-    height: int = 2160,
-    ui_scale: float = 1.0,
     hero_id: str | None = None,
 ) -> ParsedGear:
-    """Accept a tooltip screenshot, run OCR, return the parsed gear (unsaved).
+    """Accept a full-screen screenshot, run OCR, return the parsed gear (unsaved).
 
-    The caller is expected to review the result on the frontend, edit any
-    low-confidence fields, then POST to `/api/gear/manual` to persist.
+    The pipeline is calibration-free: pass any full-screen screenshot at any
+    resolution that has a gear tooltip visible. The caller is expected to review
+    the result on the frontend, edit any low-confidence fields (see
+    `field_confidences`), then POST to `/api/gear/manual` to persist.
+
+    Returns 422 if no tooltip card can be located on the screenshot.
     """
     if not file.filename:
         raise HTTPException(400, "file required")
@@ -108,11 +109,6 @@ async def ingest_gear(
     dest = cfg.screenshots_dir / f"{timestamp}_{Path(file.filename).name}"
     with dest.open("wb") as fh:
         shutil.copyfileobj(file.file, fh)
-
-    try:
-        calibration = load_calibration(cfg.calibration_dir, width, height, ui_scale)
-    except FileNotFoundError as exc:
-        raise HTTPException(412, str(exc)) from exc
 
     data = load_game_data()
     catalog = stat_catalog(data)
@@ -124,7 +120,9 @@ async def ingest_gear(
         )
 
     try:
-        parsed = parse_gear_screenshot(str(dest), calibration, catalog, hero_id=hero_id)
+        parsed = parse_gear_screenshot(str(dest), catalog, hero_id=hero_id)
+    except TooltipNotFound as exc:
+        raise HTTPException(422, f"Tooltip not detected on screenshot: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
         log.exception("OCR failed for %s", dest)
         raise HTTPException(500, f"OCR failed: {exc}") from exc

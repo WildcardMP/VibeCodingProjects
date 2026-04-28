@@ -230,8 +230,7 @@ blood-hunt-companion/
 │   └── screenshots/            ← OCR input archive (gitignored)
 │
 └── tools/
-    ├── extract_game_data.md    ← step-by-step FModel guide
-    └── ocr_calibration.py      ← interactive bounding-box calibrator
+    └── extract_game_data.md    ← step-by-step FModel guide
 ```
 
 ---
@@ -511,7 +510,7 @@ def simulate(hero, build, target):
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | **Game patch breaks datamined schemas** | High (every patch) | Version JSON files; show "data outdated — re-run FModel" banner; keep extraction guide one command away. |
-| **OCR accuracy <90 % on user's resolution** | Medium | Calibration tool; per-field manual correction UI; fuzzy-match catalog reduces typo errors. |
+| **OCR accuracy <90 % on user's resolution** | Medium | Calibration-free pipeline (Stage 1 detect, Stage 2 proportional anchors); per-field manual correction UI; fuzzy-match catalog reduces typo errors; debug-image dumps via `BLOOD_HUNT_OCR_DEBUG=1` for tuning. |
 | **NetEase tightens third-party policy** | Low–Medium | App is read-only on offline files & user screenshots — same posture as the broader datamining community. No process hooks. |
 | **Damage formula diverges from in-game reality** | Medium | A/B against training-room measurements; expose coefficients in JSON for fast tuning. |
 | **Sample-size confusion in run analytics** | Medium | Wilson confidence intervals on every win-rate; refuse to compare builds with n<10. |
@@ -529,7 +528,7 @@ The MVP is "shippable to the user's own machine" when **all** of the following a
 4. The Simulator returns Burst Acorn and Ankh DPS within ±10 % of training-room reality.
 5. The Gear Evaluator can recommend "keep / shard / reroll" on every piece in the user's inventory.
 6. The Forge ROI page produces a defensible EV table for a stack-of-10 reroll.
-7. README documents the FModel one-time setup, the OCR calibration step, and how to relaunch after a game patch.
+7. README documents the FModel one-time setup, the OCR template-asset capture (per PHASE2_OCR_INPUTS.md), and how to relaunch after a game patch.
 
 Everything beyond is V1+.
 

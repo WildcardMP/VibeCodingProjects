@@ -51,7 +51,7 @@ test:
 
 lint:
 	$(RUFF) check apps/api tools
-	$(MYPY) apps/api/app
+	cd apps/api && ../../$(MYPY) app
 
 extract:
 	@echo "Reading FModel exports from data/game/_raw/, writing canonical JSON to data/game/"

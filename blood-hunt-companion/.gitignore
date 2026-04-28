@@ -27,9 +27,8 @@ data/game/arcana.json
 data/game/forge_rules.json
 data/game/version.json
 
-# Calibration is per-machine but useful enough that you may want to keep yours.
-# Comment out the next line if you want to commit your calibration JSON.
-# data/calibration/
+# OCR debug-image dumps — only created when BLOOD_HUNT_OCR_DEBUG=1.
+data/debug/
 
 # Per-machine OCR template images — captured from the user's own UI/resolution.
 data/game/_assets/tier_badges/*.png

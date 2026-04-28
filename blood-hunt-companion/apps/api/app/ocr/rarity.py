@@ -1,21 +1,17 @@
 """Color-based rarity classification.
 
 Tooltip badge colors map cleanly to the five rarities. We classify by the dominant
-hue of a small region (typically the rarity badge or the tooltip border).
+hue of a small region (the rarity badge anchor inside the auto-detected tooltip
+card; see `app/ocr/anchors.py`).
 
-Hue ranges below are starting points calibrated against community screenshots —
-expect to fine-tune with `tools/ocr_calibration.py` against the user's actual UI.
+Hue ranges below are starting points; tune against real fixture screenshots.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ..schemas.common import Rarity
-
-if TYPE_CHECKING:
-    import numpy as np
-
 
 # (rarity, hue_low, hue_high, sat_min, val_min)  — OpenCV H is 0-179
 _HUE_RANGES: list[tuple[Rarity, int, int, int, int]] = [

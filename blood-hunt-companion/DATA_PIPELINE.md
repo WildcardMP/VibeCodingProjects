@@ -162,73 +162,112 @@ If any check fails, the asset paths drifted in a patch — search FModel for the
 
 ## Part 2 — OCR Pipeline (Personal Gear Inventory)
 
+> **Architectural note (2026-04-27):** the pipeline is **calibration-free** and
+> content-based. There is no `data/calibration/` folder, no per-resolution JSON,
+> no `tools/ocr_calibration.py`. The user takes a full-screen screenshot at any
+> resolution; the pipeline does the rest. See PROJECT.md §9 Phase 2 for the
+> rationale; this part documents how it works.
+
 ### 2.1 Workflow Overview
 
 ```
-Player presses hotkey
+Player takes a full-screen screenshot with a gear tooltip on screen
    │
    ▼
-Screenshot of gear tooltip (PNG, clipboard or file)
+[Stage 1] detect.detect_tooltip       ← Canny+contour, HSV fallback
+   │                                     → DetectedCard(bbox, confidence)
+   ▼
+[Stage 2] anchors.compute_anchors     ← proportional regions inside the card
+   │                                     → CardAnchors(name, rarity, level,
+   │                                                   slot_icon, base_effect,
+   │                                                   extended_effects)
+   ▼
+[Stage 3] anchors.segment_rows        ← whitespace-projection row split
+   │                                     → list[(y_start, y_end)]
+   ▼
+[Stage 4] _extract_row (per row)      ← preprocess → Tesseract → fuzzy stat
+   │                                     → template-match tier
+   ▼
+[Stage 5] _extract_top                ← name, rarity (color), level, slot,
+   │                                     base_effect, base_value
+   ▼
+[Stage 6] _assemble                   ← ParsedGear with field_confidences dict
    │
    ▼
-[1] Region detection      ← OpenCV: locate the tooltip card
-   │
-   ▼
-[2] Per-field crop        ← bounding boxes from calibration JSON
-   │
-   ▼
-[3] Preprocessing         ← grayscale → upscale 2x → adaptive threshold → denoise
-   │
-   ▼
-[4] Tesseract OCR         ← per-field, with allowlists (digits/letters)
-   │
-   ▼
-[5] Fuzzy normalization   ← rapidfuzz against stat-name catalog
-   │
-   ▼
-[6] Schema construction   ← {slot, hero, rarity, level, base_effect, extended_effects[]}
-   │
-   ▼
-Frontend review screen → save to SQLite
+Frontend review (color fields green/yellow/red) → POST /api/gear/manual
 ```
 
-Pattern reference: [`d2r-loot-reader`](https://libraries.io/pypi/d2r-loot-reader) for D2R inventory parsing solves the same shape of problem (color rarity + tooltip text + stat catalog) and is a useful template.
+Stage 1 raises `TooltipNotFound` when neither strategy finds a plausible card;
+the FastAPI ingest handler maps that to HTTP 422 with a useful error message.
 
-### 2.2 Calibration (One-Time Per Resolution / UI Scale)
+Set `BLOOD_HUNT_OCR_DEBUG=1` to dump annotated PNGs of every stage's
+intermediate output under `data/debug/<stage>/`. This is the primary tuning
+tool — when the pipeline misclassifies, eyeball the debug images and adjust
+the constants in the relevant module:
+- `app/ocr/detect.py::MIN_AREA_FRACTION`, `ASPECT_*`, `CANNY_*`, `HSV_V_MAX`
+- `app/ocr/anchors.py::_PROPORTIONS`, `_INK_FRAC_THRESHOLD`, `_MIN_ROW_HEIGHT_FRAC`
 
-Tooltip layout depends on resolution + UI scale. Calibration captures bounding boxes once, then reuse forever (until the UI changes).
+### 2.2 Stage 1 — Tooltip Card Detection
 
-> **Variable extended-effect count.** Per RESEARCH.md §3.1 only Legendary tooltips have all 4 extended-effect rows (Common 0 / Uncommon 1 / Rare 2 / Epic 3 / Legendary 4). Calibrate against a Legendary tooltip to capture all four regions. The pipeline detects empty rows (whitespace OCR result) and skips them, so a 2-effect Rare tooltip parsed against a 4-region calibration still works.
+Two strategies run in order, both implemented in `app/ocr/detect.py`:
 
-`tools/ocr_calibration.py`:
+1. **Canny edge + external contour.** Convert to grayscale, blur lightly,
+   Canny edges, dilate to close gaps, find external contours, filter by area
+   (≥`MIN_AREA_FRACTION` of screen) and aspect ratio (`ASPECT_MIN..ASPECT_MAX`,
+   default 0.6–3.0 — covers portrait-and-square-ish cards). Score by contour
+   solidity (filled area / bbox area); higher solidity = more rectangle-like
+   = more likely a tooltip. Returns the highest-solidity candidate above the
+   threshold.
 
-1. User drops a *clean* sample screenshot of a gear tooltip.
-2. The tool opens an OpenCV window with click-and-drag rectangles.
-3. User labels rectangles: `card`, `name`, `rarity_badge`, `level`, `base_effect`, `extended_effect_1..4`, `extended_tier_1..4`.
-4. Save coordinates as `data/calibration/<resolution>_<ui_scale>.json`.
+2. **HSV dark-background fallback.** When the game world has busy edges that
+   swamp the tooltip border, threshold on low-V HSV pixels — the tooltip's
+   semi-opaque overlay creates a large connected dark region. Same area +
+   aspect filters; pick the largest valid candidate.
 
-```jsonc
-// data/calibration/3840x2160_100.json
+Both strategies emit annotated PNGs (`detect/canny_choice.png`,
+`detect/hsv_choice.png`) when debug is on. Tune the constants by
+inspecting these dumps.
+
+### 2.3 Stage 2 — Proportional Anchors
+
+`app/ocr/anchors.py::compute_anchors` returns a `CardAnchors` whose every
+region is computed as a proportion of the **detected card's** dimensions —
+never absolute pixels. Defaults in `_PROPORTIONS`:
+
+```python
 {
-  "resolution": [3840, 2160],
-  "ui_scale": 1.0,
-  "regions": {
-    "card":             [1820, 240, 800, 1100],
-    "name":             [1840, 270, 760,   60],
-    "rarity_badge":     [1840, 340, 200,   40],
-    "level":            [2100, 340, 100,   40],
-    "base_effect":      [1840, 410, 760,   80],
-    "extended_effects": [
-      { "stat": [1840,  520, 600, 40], "tier": [2470,  520, 60, 40] },
-      { "stat": [1840,  580, 600, 40], "tier": [2470,  580, 60, 40] },
-      { "stat": [1840,  640, 600, 40], "tier": [2470,  640, 60, 40] },
-      { "stat": [1840,  700, 600, 40], "tier": [2470,  700, 60, 40] }
-    ]
-  }
+    "slot_icon":        (0.04, 0.04, 0.16, 0.14),  # top-left
+    "name":             (0.20, 0.04, 0.60, 0.10),  # top centre
+    "rarity_badge":     (0.82, 0.04, 0.14, 0.10),  # top-right
+    "level":            (0.20, 0.14, 0.30, 0.06),  # under the name
+    "base_effect":      (0.05, 0.24, 0.90, 0.10),  # divider band
+    "extended_effects": (0.05, 0.36, 0.90, 0.55),  # bottom block
 }
 ```
 
-### 2.3 Rarity Detection (Color-Based)
+Each tuple is `(x_start, y_start, w, h)` as fractions of card width/height.
+Tune by inspecting `anchors/regions.png` against real fixtures.
+
+### 2.4 Stage 3 — Row Segmentation
+
+`anchors.segment_rows` splits the extended-effects region into 0–4 row bands
+by horizontal-projection minima. The number of rows is **detected**, not
+assumed — supports tooltips with 1, 2, 3, or 4 extended effects without
+prior knowledge of rarity.
+
+Constants:
+- `_GRAY_INK_CUTOFF = 80` — pixel intensity ≥ this counts as "ink" (tooltip
+  text is light-on-dark, so high values are letters).
+- `_INK_FRAC_THRESHOLD = 0.04` — a pixel-row is "text" if ≥4% of its pixels
+  are ink.
+- `_MIN_ROW_HEIGHT_FRAC = 0.06` — rows shorter than 6% of the region drop
+  out as noise (single-pixel artefacts, separator lines, etc.).
+- Hard cap at 4 rows.
+
+Inspect `anchors/rows.png` to verify the right number of rows and where
+they land.
+
+### 2.5 Rarity Detection (Color-Based)
 
 Tooltips border / name color encodes rarity. Sample the rarity badge centroid and classify by HSV hue:
 
@@ -240,9 +279,9 @@ Tooltips border / name color encodes rarity. Sample the rarity badge centroid an
 | Epic (purple) | H ≈ 280° | |
 | Legendary (gold) | H ≈ 45°, high saturation | |
 
-Calibrate on real samples — the values above are ballparks.
+Tune on real samples — the values above are ballparks.
 
-### 2.4 Preprocessing (per cropped region)
+### 2.6 Preprocessing (per cropped region)
 
 ```python
 import cv2
@@ -263,7 +302,7 @@ def preprocess_for_tess(bgr: np.ndarray) -> np.ndarray:
     return th
 ```
 
-### 2.5 Tesseract Calls
+### 2.7 Tesseract Calls
 
 Two configs, used per region type:
 
@@ -284,7 +323,7 @@ def ocr(img, config): return pytesseract.image_to_string(img, config=config).str
 
 `--psm 7` = treat the image as a single text line. Right choice for tooltip rows. `--psm 10` = single character.
 
-### 2.6 Fuzzy Normalization
+### 2.8 Fuzzy Normalization (content-based stat identity)
 
 Tesseract will produce "Precision Oamage", "Tota1 Output Boost", etc. Normalize against the stat catalog from `gear_stats.json` (datamined in Part 1):
 
@@ -310,7 +349,7 @@ def parse_value(raw: str) -> float | None:
     return None
 ```
 
-### 2.7 Tier Letter Detection
+### 2.9 Tier Letter Detection (Tesseract + template match)
 
 Extended effect tiers (S/A/B/C/D, see RESEARCH.md §3.2) are tiny. Two strategies, run both and reconcile:
 
@@ -319,105 +358,103 @@ Extended effect tiers (S/A/B/C/D, see RESEARCH.md §3.2) are tiny. Two strategie
 
 If both agree, confidence = 1.0. If only one, confidence = 0.65. If neither, surface to the user for manual correction. (0.65 keeps a single-method read inside the yellow band defined in CLAUDE.md §3.6 rather than landing on the yellow/red boundary.)
 
-### 2.8 Output Schema
+### 2.10 Output Schema
 
 `apps/api/app/schemas/gear.py`:
 
 ```python
-from pydantic import BaseModel, Field
-from typing import Literal
-
-Rarity = Literal["common", "uncommon", "rare", "epic", "legendary"]
-Tier   = Literal["S", "A", "B", "C", "D"]
-
 class ExtendedEffect(BaseModel):
-    stat_name: str          # canonical, post-fuzzy
-    tier:      Tier
-    value:     float        # numeric reading (e.g. 8300.0 for "+8300%")
-    raw_text:  str          # what Tesseract actually saw
-    confidence: float       # 0..1
+    stat_id:    StatId           # canonical name, post-fuzzy
+    tier:       TierLetter       # S/A/B/C/D
+    value:      float            # numeric reading (e.g. 8300.0 for "+8300%")
+    raw_text:   str
+    confidence: float            # 0..1
 
 class ParsedGear(BaseModel):
-    slot:        str
-    hero_id:     str | None
-    rarity:      Rarity
-    level:       int = Field(ge=1, le=60)   # cap matches hero level cap (RESEARCH §3.6)
-    base_effect: str
-    base_value:  float
-    extended_effects: list[ExtendedEffect]
+    name:               str | None              # OCR'd item display name
+    slot:               GearSlot
+    hero_id:            str | None
+    rarity:             Rarity
+    level:              int = Field(ge=1, le=60)
+    base_effect:        StatId
+    base_value:         float
+    extended_effects:   list[ExtendedEffect]
     overall_confidence: float
-    source_screenshot:  str   # path
+    field_confidences:  dict[str, float]        # parallel dict — per-field 0..1
+    source_screenshot:  str
 ```
 
-### 2.9 End-to-End Pipeline (`apps/api/app/ocr/pipeline.py`)
+`field_confidences` carries the per-top-field confidences (`name`, `slot`,
+`rarity`, `level`, `base_effect`, `base_value`, `detection`). Per-row
+confidences live on each `ExtendedEffect.confidence`.
+
+### 2.11 End-to-End Pipeline (`apps/api/app/ocr/pipeline.py`)
 
 ```python
-def parse_gear_screenshot(img_path: str, calibration: dict, catalog: list[str]) -> ParsedGear:
-    img = cv2.imread(img_path)
-    crops = crop_regions(img, calibration["regions"])
-
-    rarity = detect_rarity_by_color(crops["rarity_badge"])
-    level  = int(parse_value(ocr(preprocess_for_tess(crops["level"]), NUM_CONFIG)) or 0)
-
-    base_text  = ocr(preprocess_for_tess(crops["base_effect"]), TEXT_CONFIG)
-    base_name, base_score = normalize_stat(extract_name(base_text), catalog)
-    base_value = parse_value(base_text) or 0.0
-
-    extended = []
-    for region in calibration["regions"]["extended_effects"]:
-        stat_text = ocr(preprocess_for_tess(crop(img, region["stat"])), TEXT_CONFIG)
-        tier_text = ocr(preprocess_for_tess(crop(img, region["tier"])), TIER_CONFIG)
-        stat_name, stat_score = normalize_stat(extract_name(stat_text), catalog)
-        tier = tier_text if tier_text in "SABCD" else template_match_tier(crop(img, region["tier"]))
-        extended.append(ExtendedEffect(
-            stat_name=stat_name, tier=tier,
-            value=parse_value(stat_text) or 0.0,
-            raw_text=stat_text,
-            confidence=min(stat_score / 100.0, 1.0),
-        ))
-
-    overall = mean([base_score / 100.0] + [e.confidence for e in extended])
-    return ParsedGear(
-        slot=infer_slot_from_base_effect(base_name),  # or read a slot icon region
-        hero_id=infer_hero_if_bound(img, calibration), # nullable
-        rarity=rarity, level=level,
-        base_effect=base_name, base_value=base_value,
-        extended_effects=extended,
-        overall_confidence=overall,
-        source_screenshot=img_path,
-    )
+def parse_gear_screenshot(image_path: str, stat_catalog: list[str], *,
+                          hero_id: str | None = None) -> ParsedGear:
+    img = _read_image(image_path)
+    card = detect_tooltip(img)                           # Stage 1
+    card_bgr = crop_card(img, card)
+    anchors = compute_anchors(card_bgr)                  # Stage 2
+    extended_region = crop(card_bgr, anchors.extended_effects)
+    row_bands = segment_rows(extended_region)            # Stage 3
+    top = _extract_top(card_bgr, anchors, stat_catalog,  # Stage 5
+                       detection_confidence=card.confidence)
+    rows = [_extract_row(extended_region, band, stat_catalog)
+            for band in row_bands]                       # Stage 4
+    return _assemble(image_path, hero_id, top, [r for r in rows if r])  # Stage 6
 ```
 
-### 2.10 Hotkey Capture
+`TooltipNotFound` from Stage 1 propagates to the FastAPI handler, which maps
+it to HTTP 422.
 
-Two options, both implemented as a tiny background process:
+### 2.12 Hotkey Capture (V2+)
+
+Two options for shipping later:
 
 | Option | Pros | Cons |
 |---|---|---|
-| **Global hotkey watcher** (`pynput` listening for e.g. `Ctrl+Shift+G`) → grab the active window with `mss` → save → POST to `/api/gear/ingest` | Fastest UX; one keypress, gear in DB | Background process must run alongside the app |
-| **Clipboard polling** — user uses the OS screenshot tool (Win+Shift+S), then a clipboard watcher detects the new image and uploads | No new hotkeys to learn | Adds a manual step |
+| **Global hotkey watcher** (`pynput` → `mss` → POST) | Fastest UX; one keypress | Background process |
+| **Clipboard polling** (Win+Shift+S → watcher → upload) | No new hotkeys | Manual step |
 
-Ship clipboard polling in MVP, add `pynput` hotkey in Phase 2's polish pass.
+MVP path: ship clipboard polling, add `pynput` hotkey in V2.
 
-### 2.11 Error Handling & Confidence Surfacing
+### 2.13 Error Handling & Confidence Surfacing
 
-The frontend always shows the parsed result for review before save. Per-field colors:
+The frontend shows the parsed result for review before save. Per-field colors
+per CLAUDE.md §3.6:
 
-- Green (`confidence ≥ 0.85`)
-- Yellow (`0.6 ≤ confidence < 0.85`)
-- Red (`< 0.6` — user must confirm or correct before save)
+- **Green** — `confidence ≥ 0.85`
+- **Yellow** — `0.6 ≤ confidence < 0.85`
+- **Red** — `< 0.6` (must confirm or correct before save)
 
-Every save records the source screenshot path so the user can re-parse later when the pipeline improves.
+The pipeline exposes `fields_below_review_threshold(parsed) -> list[str]` so
+the frontend can show a single "needs review" banner regardless of how many
+fields landed below the cutoff.
 
-### 2.12 Testing the OCR
+Every save records the source screenshot path so the user can re-parse later
+when the pipeline improves.
 
-`apps/api/tests/ocr/`:
+### 2.14 Testing the OCR
 
-- A fixtures folder with 20+ real screenshots covering all 5 rarities and all stat catalog entries.
-- For each fixture, a hand-labeled `expected.json`.
-- Test asserts ≥90 % field-level accuracy and flags drift over time.
+`apps/api/tests/`:
 
-This becomes the regression suite — every patch with UI changes runs against fixtures first, calibration only changes if accuracy drops.
+- `test_detect.py` — synthetic full-screen images verify the detector finds
+  embedded card-shaped regions and rejects out-of-spec geometry.
+- `test_anchors.py` — proportional anchors and row segmentation against
+  synthetic strips.
+- `test_pipeline.py` — `resolve_tier` and `resolve_slot` reconciliation logic.
+- `test_ocr_fixtures.py` — **the accuracy gate.** Loads every directory under
+  `tests/fixtures/ocr/fixture_*/`, runs the full pipeline against the
+  `screenshot.png`, and asserts the parsed result matches `expected.json`
+  (numeric values within ±2% or ±1 absolute, stat order ignored). The
+  aggregate test fails if pass rate drops below `TARGET_PASS_RATE = 0.9`
+  per CLAUDE.md §7.1.
+
+When fixtures are absent (early Phase 2), the fixture-gate tests are
+skipped cleanly so `make test` stays green; they auto-activate as soon as
+fixtures land.
 
 ---
 
@@ -429,7 +466,11 @@ Every Marvel Rivals patch (and especially every Blood Hunt content drop) follows
 2. **Re-run FModel** exports for the DataTables in §1.4 → `data/game/_raw/`.
 3. **`make extract`** to regenerate the canonical JSONs.
 4. **Eyeball `version.json`** and the §1.8 sanity checks.
-5. **Run OCR fixture tests.** If accuracy drops, rerun calibration — UI scale or layout may have shifted.
+5. **Run OCR fixture tests** (`py -m pytest apps/api/tests/test_ocr_fixtures.py`).
+   If accuracy drops, the tooltip UI has shifted — re-tune `app/ocr/anchors.py`
+   `_PROPORTIONS` and/or re-capture template PNGs in `data/game/_assets/` per
+   PHASE2_OCR_INPUTS.md. Use `BLOOD_HUNT_OCR_DEBUG=1` to see exactly what each
+   stage produced.
 6. **Bump app version**, commit, deploy locally.
 
 A 10-minute drill, not a half-day re-engineering effort, as long as the runbook stays honest.

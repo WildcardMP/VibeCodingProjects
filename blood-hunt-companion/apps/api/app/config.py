@@ -33,11 +33,12 @@ class Settings(BaseModel):
     repo_root: Path
     game_data_dir: Path
     game_raw_dir: Path
-    calibration_dir: Path
     screenshots_dir: Path
+    debug_dir: Path
     db_path: Path
     cors_origins: list[str]
     tesseract_cmd: str | None  # None = use PATH
+    ocr_debug: bool
 
     @classmethod
     def load(cls) -> Settings:
@@ -46,13 +47,14 @@ class Settings(BaseModel):
             repo_root=root,
             game_data_dir=root / "data" / "game",
             game_raw_dir=root / "data" / "game" / "_raw",
-            calibration_dir=root / "data" / "calibration",
             screenshots_dir=root / "data" / "screenshots",
+            debug_dir=root / "data" / "debug",
             db_path=Path(os.environ.get("BHC_DB_PATH", str(root / "data" / "personal.db"))),
             cors_origins=os.environ.get(
                 "BHC_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
             ).split(","),
             tesseract_cmd=os.environ.get("BHC_TESSERACT_CMD") or None,
+            ocr_debug=os.environ.get("BLOOD_HUNT_OCR_DEBUG", "").strip() in {"1", "true", "True"},
         )
 
 
