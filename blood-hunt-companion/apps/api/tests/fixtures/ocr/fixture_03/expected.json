@@ -1,0 +1,19 @@
+{
+  "name": "Alchemy Amulet",
+  "slot": "accessory",
+  "rarity": "legendary",
+  "hero": "Moon Knight",
+  "level": 60,
+  "rating": 6421,
+  "base_effects": [
+    { "name": "Critical Hit Rate", "value": 16.2 },
+    { "name": "Block Rate", "value": 18.5 }
+  ],
+  "extended_effects": [
+    { "stat_id": "Bonus Damage against Close-Range Enemies", "tier": "S", "value": 830 },
+    { "stat_id": "Block Damage Reduction", "tier": "C", "value": 119 },
+    { "stat_id": "Precision Damage", "tier": "S", "value": 1942 },
+    { "stat_id": "Total Damage Bonus", "tier": "A", "value": 469 },
+    { "stat_id": "Fist of Eclipse Enhancement: Fist of Eclipse applies Eclipse Mark stacks", "tier": "C", "value": 15 }
+  ]
+}

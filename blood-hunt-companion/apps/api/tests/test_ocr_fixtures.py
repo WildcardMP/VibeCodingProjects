@@ -186,15 +186,28 @@ def _stat_catalog() -> list[str]:
     return stat_catalog(load_game_data())
 
 
+def _is_ready(fixture_dir: Path) -> bool:
+    """A fixture is "ready" only when both files are present.
+
+    Folders with just `expected.json` (transcribed but no capture yet) or just
+    `screenshot.png` (captured but no ground truth yet) are still in flight —
+    the test gate skips them rather than failing, so the user can land
+    transcriptions and captures in any order.
+    """
+    return (fixture_dir / "screenshot.png").is_file() and (
+        fixture_dir / "expected.json"
+    ).is_file()
+
+
 @pytest.fixture(scope="module")
 def fixtures_present() -> list[Path]:
-    fixtures = _fixtures()
-    if not fixtures:
+    ready = [fx for fx in _fixtures() if _is_ready(fx)]
+    if not ready:
         pytest.skip(
-            "No OCR fixtures yet under tests/fixtures/ocr/. "
-            "Capture screenshots per PHASE2_OCR_INPUTS.md to enable this gate."
+            "No fully-populated OCR fixtures (need both screenshot.png and "
+            "expected.json). Capture per PHASE2_OCR_INPUTS.md to enable this gate."
         )
-    return fixtures
+    return ready
 
 
 def _iter_fixture_ids(fixtures: Iterable[Path]) -> list[str]:
@@ -215,14 +228,24 @@ def _parametrized_fixtures() -> list[Path]:
     ids=_iter_fixture_ids(_parametrized_fixtures()) or ["__none__"],
 )
 def test_fixture_parses_correctly(fixture_dir: Path) -> None:
-    """Each fixture must parse with no field mismatches."""
+    """Each fixture must parse with no field mismatches.
+
+    Folders missing either `screenshot.png` or `expected.json` are skipped
+    (not failed) so the suite stays green while batches of fixtures land
+    incrementally — the user transcribes ground truth and captures the
+    matching screenshot in separate sessions.
+    """
     pytest.importorskip("pytesseract")  # skip per-test if tesseract isn't installed
-    from app.ocr.pipeline import parse_gear_screenshot
 
     screenshot = fixture_dir / "screenshot.png"
     expected_path = fixture_dir / "expected.json"
-    assert screenshot.exists(), f"missing {screenshot}"
-    assert expected_path.exists(), f"missing {expected_path}"
+    if not screenshot.is_file() or not expected_path.is_file():
+        missing = [
+            p.name for p in (screenshot, expected_path) if not p.is_file()
+        ]
+        pytest.skip(f"{fixture_dir.name} not ready (missing {', '.join(missing)})")
+
+    from app.ocr.pipeline import parse_gear_screenshot
 
     expected = json.loads(expected_path.read_text("utf-8"))
     parsed = parse_gear_screenshot(str(screenshot), _stat_catalog())

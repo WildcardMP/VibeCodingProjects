@@ -1,0 +1,19 @@
+{
+  "name": "Runic Armor",
+  "slot": "armor",
+  "rarity": "legendary",
+  "hero": "Moon Knight",
+  "level": 60,
+  "rating": 6636,
+  "base_effects": [
+    { "name": "Health", "value": 2419 },
+    { "name": "Armor Value", "value": 438 }
+  ],
+  "extended_effects": [
+    { "stat_id": "Armor Value", "tier": "A", "value": 437 },
+    { "stat_id": "Health restored per/s during Restorative Respire", "tier": "S", "value": 360 },
+    { "stat_id": "Block Damage Reduction", "tier": "D", "value": 108 },
+    { "stat_id": "Health", "tier": "S", "value": 107 },
+    { "stat_id": "Dodge Rate", "tier": "A", "value": 6.9 }
+  ]
+}

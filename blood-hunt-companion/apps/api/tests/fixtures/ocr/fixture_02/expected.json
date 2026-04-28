@@ -1,0 +1,19 @@
+{
+  "name": "Scepter of Rites",
+  "slot": "weapon",
+  "rarity": "legendary",
+  "hero": "Moon Knight",
+  "level": 60,
+  "rating": 6252,
+  "base_effects": [
+    { "name": "Crescent Dart base damage", "value": 120 },
+    { "name": "Moonblade base damage", "value": 177 }
+  ],
+  "extended_effects": [
+    { "stat_id": "Damage Bonus against Healthy Enemies", "tier": "D", "value": 458 },
+    { "stat_id": "Waxing Moon Enhancement: Crescent Darts bounce between Ankhs", "tier": "D", "value": 12 },
+    { "stat_id": "Precision Damage", "tier": "S", "value": 1942 },
+    { "stat_id": "Precision Rate", "tier": "S", "value": 6.2 },
+    { "stat_id": "Lunar Glide Enhancement: Firing interval of Crescent Darts during Night Glider", "tier": "A", "value": -0.34 }
+  ]
+}
