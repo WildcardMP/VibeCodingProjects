@@ -125,11 +125,14 @@ Aim to hit all of these across your 10+ fixtures:
 {
   "name": "Mjolnir Fragment",
   "slot": "weapon",
-  "tier": "S",
-  "level": 47,
-  "stats": [
-    {"name": "Attack Power", "value": 142},
-    {"name": "Crit Rate", "value": 8.5}
+  "rarity": "legendary",
+  "level": 60,
+  "base_effect": "Precision Damage",
+  "base_value": 8300,
+  "extended_effects": [
+    {"stat_id": "Total Output Boost", "tier": "S", "value": 4200},
+    {"stat_id": "Boss Damage", "tier": "A", "value": 1800},
+    {"stat_id": "Crit Rate", "tier": "B", "value": 8.5}
   ]
 }
 ```
@@ -138,9 +141,19 @@ Aim to hit all of these across your 10+ fixtures:
 
 - `name` — exact item name as shown in-game (case-sensitive)
 - `slot` — one of: `"weapon"`, `"armor"`, `"accessory"`, `"exclusive"` (lowercase)
-- `tier` — one of: `"S"`, `"A"`, `"B"`, `"C"`, `"D"` (capital letter)
-- `level` — integer, no quotes
-- `stats` — array of `{name, value}`. **Order in the array should match the order they appear on screen** (top to bottom). Names must match the in-game label. Values are numbers — use a decimal for percentages (e.g., `8.5` for 8.5%).
+- `rarity` — one of: `"common"`, `"uncommon"`, `"rare"`, `"epic"`, `"legendary"` (lowercase). This is the **item's overall rarity**, indicated by the tooltip border color. Determines how many extended effects the item has (legendaries get up to 4).
+- `level` — integer, no quotes (cap is 60)
+- `base_effect` — name of the item's base/main effect (the headline stat at the top of the tooltip)
+- `base_value` — numeric value of the base effect
+- `extended_effects` — array of `{stat_id, tier, value}`, in the order they appear on screen (top to bottom). The number of entries depends on rarity (legendaries up to 4, lower rarities fewer).
+  - `stat_id` — the stat label exactly as shown in-game
+  - `tier` — **per-row tier**, one of `"S"`, `"A"`, `"B"`, `"C"`, `"D"`. This is the magnitude band of *that specific rolled stat*, NOT the item's overall rarity.
+  - `value` — numeric value of the rolled stat. Use a decimal for percentages (e.g., `8.5` for 8.5%).
+
+**Two important distinctions:**
+
+1. **Rarity ≠ Tier.** `rarity` is the item's color/border (legendary, epic, etc.). `tier` is the S/A/B/C/D grade of an individual extended-effect roll. A legendary item can have a D-tier roll on it.
+2. **Order matters.** List `extended_effects` in the order they appear on screen, top to bottom. The pipeline doesn't care about position when *identifying* stats (it uses content), but order is needed so tests can verify the pipeline reported them in the correct visual order.
 
 ### Validating your JSON
 
