@@ -1,0 +1,30 @@
+[
+  {
+    "Type": "DataTable",
+    "Name": "DT_GearStats",
+    "Rows": {
+      "TotalOutputBoost": {
+        "StatId": "Total Output Boost",
+        "DisplayName": "Total Output Boost",
+        "AppliesToSlots": ["chest", "gloves", "boots", "helm"],
+        "Tiers": [
+          { "Tier": "C", "Min": 100,  "Max": 400 },
+          { "Tier": "B", "Min": 400,  "Max": 1500 },
+          { "Tier": "A", "Min": 1500, "Max": 4000 },
+          { "Tier": "S", "Min": 4000, "Max": 8500 }
+        ]
+      },
+      "PrecisionDamage": {
+        "StatId": "Precision Damage",
+        "DisplayName": "Precision Damage",
+        "AppliesToSlots": ["gloves", "chest"],
+        "Tiers": [
+          { "Tier": "C", "Min": 100,  "Max": 400 },
+          { "Tier": "B", "Min": 400,  "Max": 1500 },
+          { "Tier": "A", "Min": 1500, "Max": 4000 },
+          { "Tier": "S", "Min": 4000, "Max": 8500 }
+        ]
+      }
+    }
+  }
+]

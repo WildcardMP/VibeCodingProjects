@@ -1,0 +1,26 @@
+[
+  {
+    "Type": "DataTable",
+    "Name": "DT_ArcanaScrolls",
+    "Rows": {
+      "ScrollOfConquest": {
+        "Id": "scroll_of_conquest",
+        "Name": "Scroll of Conquest",
+        "Tier": "legendary",
+        "Description": "Increases total damage dealt by 30%.",
+        "Effects": [
+          { "StatId": "Total Damage Bonus", "Value": 0.30, "Multiplicative": true }
+        ]
+      },
+      "ScrollOfImmortality": {
+        "Id": "scroll_of_immortality",
+        "Name": "Scroll of Immortality",
+        "Tier": "legendary",
+        "Description": "Increases max HP by 50%.",
+        "Effects": [
+          { "StatId": "HP", "Value": 0.50, "Multiplicative": true }
+        ]
+      }
+    }
+  }
+]

@@ -1,0 +1,38 @@
+[
+  {
+    "Type": "DataTable",
+    "Name": "DT_HeroAbilities",
+    "Rows": {
+      "SquirrelGirl_BurstAcorn": {
+        "HeroId": "squirrel_girl",
+        "HeroDisplayName": "Squirrel Girl",
+        "AbilityId": "burst_acorn",
+        "DisplayName": "Burst Acorn",
+        "Tags": ["projectile", "aoe"],
+        "BaseDamage": 80.0,
+        "Cooldown": 6.0,
+        "Scaling": [
+          { "StatId": "Precision Damage", "Coefficient": 1.0 },
+          { "StatId": "Total Output Boost", "Coefficient": 1.0 }
+        ],
+        "CanPrecision": true,
+        "CanCrit": true
+      },
+      "MoonKnight_Ankh": {
+        "HeroId": "moon_knight",
+        "HeroDisplayName": "Moon Knight",
+        "AbilityId": "ankh",
+        "DisplayName": "Ankh of Khonshu",
+        "Tags": ["debuff", "boss-melt"],
+        "BaseDamage": 100.0,
+        "Cooldown": 10.0,
+        "Scaling": [
+          { "StatId": "Total Output Boost", "Coefficient": 1.0 },
+          { "StatId": "Boss Damage", "Coefficient": 1.0 }
+        ],
+        "CanPrecision": true,
+        "CanCrit": true
+      }
+    }
+  }
+]

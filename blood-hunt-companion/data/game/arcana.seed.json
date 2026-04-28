@@ -1,0 +1,36 @@
+[
+  {
+    "id": "scroll_of_conquest",
+    "name": "Scroll of Conquest",
+    "tier": "legendary",
+    "effects": [
+      { "stat": "Total Damage Bonus", "value": 0.30, "multiplicative": true }
+    ],
+    "description": "Increases total damage dealt by 30%."
+  },
+  {
+    "id": "scroll_of_immortality",
+    "name": "Scroll of Immortality",
+    "tier": "legendary",
+    "effects": [
+      { "stat": "HP", "value": 0.50, "multiplicative": true }
+    ],
+    "description": "Increases max HP by 50%."
+  },
+  {
+    "id": "scroll_of_blessing",
+    "name": "Scroll of Blessing",
+    "tier": "epic",
+    "effects": [
+      { "stat": "Total Output Boost", "value": 0.20, "multiplicative": true }
+    ],
+    "description": "Increases total output boost by 20%."
+  },
+  {
+    "id": "scroll_of_midas",
+    "name": "Scroll of Midas",
+    "tier": "epic",
+    "effects": [],
+    "description": "Doubles Uru Shard rewards from this run."
+  }
+]

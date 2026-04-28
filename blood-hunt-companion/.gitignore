@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# App data — personal & generated
+data/personal.db
+data/screenshots/
+data/game/_raw/*.json
+data/game/heroes.json
+data/game/traits.json
+data/game/gear_stats.json
+data/game/arcana.json
+data/game/forge_rules.json
+data/game/version.json
+
+# Calibration is per-machine but useful enough that you may want to keep yours.
+# Comment out the next line if you want to commit your calibration JSON.
+# data/calibration/
+
+# Per-machine OCR template images — captured from the user's own UI/resolution.
+data/game/_assets/tier_badges/*.png
+data/game/_assets/slot_icons/*.png
+
+# Don't ignore the seed/sample fixtures or the _assets README
+!data/game/*.seed.json
+!apps/api/tests/fixtures/raw_exports/*.sample.json
+!data/game/_assets/README.md
+
+# Editor
+.vscode/
+.idea/

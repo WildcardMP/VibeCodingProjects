@@ -1,0 +1,65 @@
+[
+  {
+    "id": "squirrel_girl",
+    "display_name": "Squirrel Girl",
+    "abilities": [
+      {
+        "id": "burst_acorn",
+        "name": "Burst Acorn",
+        "tags": ["projectile", "aoe"],
+        "base_damage": 80,
+        "scaling": [
+          { "stat": "Precision Damage", "coefficient": 1.0 },
+          { "stat": "Total Output Boost", "coefficient": 1.0 }
+        ],
+        "cooldown": 6.0,
+        "can_precision": true,
+        "can_crit": true
+      },
+      {
+        "id": "squirrel_friends",
+        "name": "Squirrel Friends",
+        "tags": ["summon", "dot"],
+        "base_damage": 50,
+        "scaling": [
+          { "stat": "Total Damage Bonus", "coefficient": 1.0 },
+          { "stat": "Total Output Boost", "coefficient": 1.0 }
+        ],
+        "cooldown": 12.0,
+        "can_precision": false,
+        "can_crit": false
+      }
+    ]
+  },
+  {
+    "id": "moon_knight",
+    "display_name": "Moon Knight",
+    "abilities": [
+      {
+        "id": "ankh",
+        "name": "Ankh of Khonshu",
+        "tags": ["debuff", "boss-melt"],
+        "base_damage": 100,
+        "scaling": [
+          { "stat": "Total Output Boost", "coefficient": 1.0 },
+          { "stat": "Boss Damage", "coefficient": 1.0 }
+        ],
+        "cooldown": 10.0,
+        "can_precision": true,
+        "can_crit": true
+      },
+      {
+        "id": "moon_blade",
+        "name": "Moon Blade",
+        "tags": ["projectile", "ricochet"],
+        "base_damage": 90,
+        "scaling": [
+          { "stat": "Total Output Boost", "coefficient": 1.0 }
+        ],
+        "cooldown": 0.8,
+        "can_precision": true,
+        "can_crit": true
+      }
+    ]
+  }
+]
