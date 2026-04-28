@@ -12,14 +12,35 @@ help:
 	@echo "  make clean       remove build/test caches"
 
 VENV ?= .venv
-PY := $(VENV)/bin/python
-PIP := $(VENV)/bin/pip
 
-$(VENV)/bin/activate:
-	python3 -m venv $(VENV)
-	$(PIP) install --upgrade pip
+# Cross-platform venv layout: Windows uses .venv\Scripts, POSIX uses .venv/bin
+ifeq ($(OS),Windows_NT)
+	VENV_BIN := $(VENV)/Scripts
+	PY := $(VENV_BIN)/python.exe
+	PIP := $(VENV_BIN)/pip.exe
+	RUFF := $(VENV_BIN)/ruff.exe
+	MYPY := $(VENV_BIN)/mypy.exe
+	PYTHON_BOOTSTRAP := python
+	VENV_SENTINEL := $(VENV_BIN)/python.exe
+	RM_CACHES := if exist .pytest_cache rmdir /s /q .pytest_cache & if exist .mypy_cache rmdir /s /q .mypy_cache & if exist .ruff_cache rmdir /s /q .ruff_cache
+	RM_PYCACHE := for /d /r %%d in (__pycache__) do @if exist "%%d" rmdir /s /q "%%d"
+else
+	VENV_BIN := $(VENV)/bin
+	PY := $(VENV_BIN)/python
+	PIP := $(VENV_BIN)/pip
+	RUFF := $(VENV_BIN)/ruff
+	MYPY := $(VENV_BIN)/mypy
+	PYTHON_BOOTSTRAP := python3
+	VENV_SENTINEL := $(VENV_BIN)/activate
+	RM_CACHES := rm -rf .pytest_cache .mypy_cache .ruff_cache
+	RM_PYCACHE := find . -type d -name __pycache__ -exec rm -rf {} +
+endif
 
-install: $(VENV)/bin/activate
+$(VENV_SENTINEL):
+	$(PYTHON_BOOTSTRAP) -m venv $(VENV)
+	$(PY) -m pip install --upgrade pip
+
+install: $(VENV_SENTINEL)
 	$(PIP) install -e "apps/api[dev]"
 
 api:
@@ -29,8 +50,8 @@ test:
 	$(PY) -m pytest apps/api/tests
 
 lint:
-	$(VENV)/bin/ruff check apps/api tools
-	$(VENV)/bin/mypy apps/api/app
+	$(RUFF) check apps/api tools
+	$(MYPY) apps/api/app
 
 extract:
 	@echo "Reading FModel exports from data/game/_raw/, writing canonical JSON to data/game/"
@@ -40,9 +61,13 @@ migrate:
 	cd apps/api && ../../$(PY) -m alembic upgrade head
 
 migrate-revision:
+ifeq ($(OS),Windows_NT)
+	@if "$(m)"=="" (echo Usage: make migrate-revision m="message" & exit /b 1)
+else
 	@if [ -z "$(m)" ]; then echo "Usage: make migrate-revision m=\"message\""; exit 1; fi
+endif
 	cd apps/api && ../../$(PY) -m alembic revision --autogenerate -m "$(m)"
 
 clean:
-	rm -rf .pytest_cache .mypy_cache .ruff_cache
-	find . -type d -name __pycache__ -exec rm -rf {} +
+	$(RM_CACHES)
+	$(RM_PYCACHE)
