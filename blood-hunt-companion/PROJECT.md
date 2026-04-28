@@ -323,14 +323,49 @@ All endpoints local-only, CORS open to `localhost:3000`.
 
 ### Phase 2 — Gear Ingest via OCR + Persistence (3–4 days)
 
-- Implement OCR pipeline per [`DATA_PIPELINE.md`](./DATA_PIPELINE.md) §4.
-- Calibration tool (`tools/ocr_calibration.py`) to record bounding boxes on the user's actual resolution.
-- Tier-letter dual strategy (Tesseract + template match) and slot-icon template matching, both with graceful fallback when assets are missing.
-- `/api/gear/ingest` endpoint already exists; add `/api/gear/manual` (POST), `/api/gear` (GET with filters), `/api/gear/{id}` (PATCH, DELETE).
-- SQLAlchemy models + Alembic migrations from day one — schema evolves every patch (see CLAUDE.md §7).
-- Frontend: drag-drop screenshot or paste-from-clipboard. Show parsed result with confidence per field, allow manual correction, save.
+**Architectural pivot (2026-04-27):** OCR pipeline is **calibration-free** and uses **content-based stat identification** rather than fixed positional bounding boxes.
 
-**Exit criteria:** Drop ten screenshots of real gear, ≥9 parse correctly with no manual edits, and the saved pieces survive an API restart.
+**Why the pivot:**
+- The Marvel Rivals gear tooltip can appear anywhere on screen depending on what the user is hovering, so fixed-position calibration is brittle.
+- Stats within the extended-effects block can appear in any order on any given gear roll, so reading "row 1 = Attack Power" by position is incorrect.
+- The companion app must work for any user at any resolution with zero setup — calibration is a non-starter for shareability.
+
+**Pipeline stages:**
+
+1. **Tooltip card detection.** OpenCV-based detection of the tooltip's bounding box on the screenshot using edge detection + contour filtering. Tooltip has consistent border style and semi-opaque background that distinguishes it from the game world behind it. Output: `(x, y, w, h)` of the card.
+
+2. **Anchor detection inside the card.** Detect structural elements with known *relative* positions within the card: rarity badge location, item name region, base-effect divider, extended-effects block. All measurements proportional to detected card dimensions, never absolute pixels.
+
+3. **Row segmentation.** The extended-effects block is segmented into rows by detecting horizontal whitespace gaps. Number of rows is detected, not assumed — supports tooltips with 1, 2, 3, or 4 extended effects.
+
+4. **Row content extraction.** For each detected row, OCR the text to read stat label and value. Fuzzy-match the label against the canonical stat list in `app/ocr/fuzzy.py` to identify which stat it is. **Stat identity is content-based, not position-based.**
+
+5. **Tier indicator extraction.** Template-match each row's tier indicator against the reference tier badge PNGs in `data/game/_assets/tier_badges/`.
+
+6. **Confidence scoring + manual correction.** Every extracted field carries a confidence score. Low-confidence fields surface to the user in the UI for manual review and correction.
+
+**Implementation tasks:**
+
+- Replace `tools/ocr_calibration.py` and the calibration JSON loading logic with `app/ocr/detect.py` (tooltip detector) and `app/ocr/anchors.py` (relative-position anchor finder).
+- Update `app/ocr/pipeline.py` to chain: detect → anchor → segment rows → extract content → score confidence.
+- Keep the existing tier-badge template matching (already implemented in `app/ocr/templates.py`).
+- Keep the existing fuzzy matching (already implemented in `app/ocr/fuzzy.py`).
+- `/api/gear/ingest` endpoint exists; manual CRUD endpoints (`/api/gear/manual`, GET/PATCH/DELETE) already shipped in Phase 2 §7.0.
+- Frontend: drag-drop screenshot or paste-from-clipboard. Show parsed result with per-field confidence, allow manual correction, save.
+
+**User-facing inputs (one-time):**
+
+- 5 tier badge reference PNGs (S/A/B/C/D), tightly cropped from any gear screenshot.
+- 4 slot icon reference PNGs (weapon/armor/accessory/exclusive), tightly cropped.
+- 10+ test fixture screenshots paired with hand-labeled `expected.json` ground truth, used by automated tests to verify pipeline accuracy.
+
+**Removed from previous architecture:**
+
+- `tools/ocr_calibration.py` — no longer needed.
+- Per-resolution calibration JSONs in `data/calibration/` — no longer needed.
+- Hard-coded bounding box configuration — replaced by detected anchors.
+
+**Exit criteria:** Drop ten screenshots of real gear at any resolution with the tooltip in any position, ≥9 parse correctly with no manual edits, and the saved pieces survive an API restart. Pipeline runs end-to-end with zero user configuration.
 
 ### Phase 3 — Damage Simulator MVP (2 days)
 
