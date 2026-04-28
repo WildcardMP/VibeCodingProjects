@@ -7,7 +7,7 @@ TypeScript via `datamodel-code-generator` (see Makefile `gen-types` target).
 
 from .arcana import ArcanaScroll
 from .common import GearSlot, Rarity, StatId, TierLetter
-from .gear import ExtendedEffect, GearPatch, GearPiece, ParsedGear
+from .gear import BaseEffect, ExtendedEffect, GearPatch, GearPiece, ParsedGear
 from .hero import Ability, AbilityScaling, Hero
 from .run import Build, Run
 from .trait import TraitEffect, TraitNode
@@ -16,6 +16,7 @@ __all__ = [
     "Ability",
     "AbilityScaling",
     "ArcanaScroll",
+    "BaseEffect",
     "Build",
     "ExtendedEffect",
     "GearPatch",

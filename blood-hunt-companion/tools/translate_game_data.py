@@ -265,7 +265,7 @@ def translate_arcana(raw: Any) -> list[dict[str, Any]]:
             {
                 "id": _coerce_str(_pick(row, "Id", "ScrollId"), default=row_name),
                 "name": _coerce_str(_pick(row, "Name", "DisplayName"), default=row_name),
-                "tier": _coerce_str(_pick(row, "Tier", "Rarity"), default="common"),
+                "tier": _coerce_str(_pick(row, "Tier", "Rarity"), default="normal"),
                 "effects": [e for e in effects if e["stat"]],
                 "description": _coerce_str(_pick(row, "Description", "Desc")),
             }

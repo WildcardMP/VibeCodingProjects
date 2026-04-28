@@ -1,9 +1,9 @@
 """Gear ORM model — mirror of the SQL schema in PROJECT.md §7.
 
 Pydantic ↔ ORM conversion lives here so the router doesn't have to know JSON
-encoding details. `extended_effects` is stored as a TEXT JSON blob because
-SQLite has no native JSON column type and the field is small (≤4 entries) — a
-relational `extended_effects` table would be overkill for the access pattern
+encoding details. `extended_effects` and `base_effects` are stored as TEXT JSON
+blobs because SQLite has no native JSON column type and these lists are small
+(≤5 entries) — relational tables would be overkill for the access pattern
 (always read with the parent row, never queried independently).
 """
 
@@ -17,7 +17,7 @@ from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..schemas.common import GearSlot, Rarity
-from ..schemas.gear import ExtendedEffect, GearPiece, ParsedGear
+from ..schemas.gear import BaseEffect, ExtendedEffect, GearPiece, ParsedGear
 from .base import Base
 
 
@@ -31,11 +31,12 @@ class GearORM(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     slot: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    hero: Mapped[str | None] = mapped_column(String(64), nullable=True)
     hero_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     rarity: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     level: Mapped[int] = mapped_column(Integer, nullable=False)
-    base_effect: Mapped[str] = mapped_column(String(64), nullable=False)
-    base_value: Mapped[float] = mapped_column(Float, nullable=False)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    base_effects_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     extended_effects_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     source_screenshot: Mapped[str] = mapped_column(Text, nullable=False, default="")
     ocr_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -62,6 +63,19 @@ class GearORM(Base):
         return [ExtendedEffect.model_validate(item) for item in raw]
 
     @staticmethod
+    def _dump_base(effects: list[BaseEffect]) -> str:
+        return json.dumps([e.model_dump(mode="json") for e in effects])
+
+    @staticmethod
+    def _load_base(blob: str) -> list[BaseEffect]:
+        if not blob:
+            return []
+        raw: Any = json.loads(blob)
+        if not isinstance(raw, list):
+            return []
+        return [BaseEffect.model_validate(item) for item in raw]
+
+    @staticmethod
     def _dump_field_confidences(d: dict[str, float]) -> str:
         return json.dumps(d)
 
@@ -80,11 +94,12 @@ class GearORM(Base):
         return cls(
             name=parsed.name,
             slot=parsed.slot,
+            hero=parsed.hero,
             hero_id=parsed.hero_id,
             rarity=parsed.rarity,
             level=parsed.level,
-            base_effect=parsed.base_effect,
-            base_value=parsed.base_value,
+            rating=parsed.rating,
+            base_effects_json=cls._dump_base(parsed.base_effects),
             extended_effects_json=cls._dump_extended(parsed.extended_effects),
             source_screenshot=parsed.source_screenshot,
             ocr_confidence=parsed.overall_confidence,
@@ -100,11 +115,12 @@ class GearORM(Base):
             id=self.id,
             name=self.name,
             slot=cast_slot(self.slot),
+            hero=self.hero,
             hero_id=self.hero_id,
             rarity=cast_rarity(self.rarity),
             level=self.level,
-            base_effect=self.base_effect,
-            base_value=self.base_value,
+            rating=self.rating or 0,
+            base_effects=self._load_base(self.base_effects_json or "[]"),
             extended_effects=self._load_extended(self.extended_effects_json or "[]"),
             overall_confidence=self.ocr_confidence or 0.0,
             field_confidences=self._load_field_confidences(self.field_confidences_json or "{}"),
@@ -125,6 +141,6 @@ def cast_slot(value: str) -> GearSlot:
 
 
 def cast_rarity(value: str) -> Rarity:
-    if value not in {"common", "uncommon", "rare", "epic", "legendary"}:
+    if value not in {"normal", "advanced", "rare", "epic", "legendary"}:
         raise ValueError(f"unknown rarity in DB: {value!r}")
     return value  # type: ignore[return-value]

@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .common import StatId
 
-ArcanaTier = Literal["common", "uncommon", "rare", "epic", "legendary"]
+ArcanaTier = Literal["normal", "advanced", "rare", "epic", "legendary"]
 
 
 class ArcanaEffect(BaseModel):

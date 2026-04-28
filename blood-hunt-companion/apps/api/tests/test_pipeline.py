@@ -18,10 +18,11 @@ from app.ocr import templates as tm  # noqa: E402
 from app.ocr.anchors import CardAnchors, Region  # noqa: E402
 from app.ocr.pipeline import (  # noqa: E402
     fields_below_review_threshold,
+    resolve_hero,
     resolve_slot,
     resolve_tier,
 )
-from app.schemas.gear import ExtendedEffect, ParsedGear  # noqa: E402
+from app.schemas.gear import BaseEffect, ExtendedEffect, ParsedGear  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +67,9 @@ def _stub_anchors(card_w: int = 200, card_h: int = 400) -> CardAnchors:
         slot_icon=Region(0, 0, 1, 1),
         rarity_badge=Region(0, 0, 10, 10),
         level=Region(0, 0, 30, 20),
-        base_effect=Region(0, 0, card_w, 30),
+        rating=Region(0, 0, 30, 20),
+        hero=Region(0, 0, card_w, 20),
+        base_effects=Region(0, 0, card_w, 30),
         extended_effects=Region(0, 0, card_w, card_h - 60),
     )
 
@@ -119,11 +122,15 @@ def test_resolve_tier_strips_garbage_from_tesseract(tier_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 # resolve_slot — heuristic fallback (template miss)
 # ---------------------------------------------------------------------------
+def _be(name: str, value: float = 1.0) -> BaseEffect:
+    return BaseEffect(name=name, value=value)
+
+
 def test_resolve_slot_falls_back_to_heuristic_without_templates(tmp_path: Path) -> None:
     card = np.zeros((400, 200, 3), dtype=np.uint8)
     anchors = _stub_anchors()
     slot, conf = resolve_slot(
-        card, anchors, "Total Output Boost", templates_dir=tmp_path / "missing"
+        card, anchors, [_be("Total Output Boost")], templates_dir=tmp_path / "missing"
     )
     assert slot == "armor"
     assert conf == 0.5
@@ -133,17 +140,45 @@ def test_resolve_slot_heuristic_distinct_per_base_effect(tmp_path: Path) -> None
     card = np.zeros((400, 200, 3), dtype=np.uint8)
     anchors = _stub_anchors()
     missing = tmp_path / "missing"
-    assert resolve_slot(card, anchors, "Precision Damage", templates_dir=missing)[0] == "weapon"
-    assert resolve_slot(card, anchors, "Boss Damage", templates_dir=missing)[0] == "accessory"
-    assert resolve_slot(card, anchors, "HP", templates_dir=missing)[0] == "armor"
+    assert (
+        resolve_slot(card, anchors, [_be("Precision Damage")], templates_dir=missing)[0]
+        == "weapon"
+    )
+    assert (
+        resolve_slot(card, anchors, [_be("Boss Damage")], templates_dir=missing)[0]
+        == "accessory"
+    )
+    assert resolve_slot(card, anchors, [_be("HP")], templates_dir=missing)[0] == "armor"
+
+
+def test_resolve_slot_heuristic_uses_first_recognized_base_effect(tmp_path: Path) -> None:
+    """When the first row is unknown, fall through to the first known one."""
+    card = np.zeros((400, 200, 3), dtype=np.uint8)
+    anchors = _stub_anchors()
+    slot, conf = resolve_slot(
+        card,
+        anchors,
+        [_be("Some Future Stat"), _be("Boss Damage")],
+        templates_dir=tmp_path / "missing",
+    )
+    assert slot == "accessory"
+    assert conf == 0.5
 
 
 def test_resolve_slot_heuristic_unknown_stat_defaults_to_armor(tmp_path: Path) -> None:
     card = np.zeros((400, 200, 3), dtype=np.uint8)
     anchors = _stub_anchors()
     slot, conf = resolve_slot(
-        card, anchors, "Some Future Stat", templates_dir=tmp_path / "missing"
+        card, anchors, [_be("Some Future Stat")], templates_dir=tmp_path / "missing"
     )
+    assert slot == "armor"
+    assert conf == 0.5
+
+
+def test_resolve_slot_heuristic_empty_list_defaults_to_armor(tmp_path: Path) -> None:
+    card = np.zeros((400, 200, 3), dtype=np.uint8)
+    anchors = _stub_anchors()
+    slot, conf = resolve_slot(card, anchors, [], templates_dir=tmp_path / "missing")
     assert slot == "armor"
     assert conf == 0.5
 
@@ -164,14 +199,45 @@ def test_resolve_slot_uses_template_match_when_available(tmp_path: Path) -> None
         slot_icon=Region(10, 10, 64, 64),
         rarity_badge=Region(0, 0, 10, 10),
         level=Region(0, 0, 30, 20),
-        base_effect=Region(0, 0, 200, 30),
+        rating=Region(0, 0, 30, 20),
+        hero=Region(0, 0, 200, 20),
+        base_effects=Region(0, 0, 200, 30),
         extended_effects=Region(0, 0, 200, 340),
     )
     slot, conf = resolve_slot(
-        card, anchors, "Total Output Boost", templates_dir=slot_dir
+        card, anchors, [_be("Total Output Boost")], templates_dir=slot_dir
     )
     assert slot == "exclusive"
     assert conf > 0.8
+
+
+# ---------------------------------------------------------------------------
+# resolve_hero — fuzzy match against canonical roster
+# ---------------------------------------------------------------------------
+def test_resolve_hero_exact_match() -> None:
+    display, slug, conf = resolve_hero("Moon Knight")
+    assert display == "Moon Knight"
+    assert slug == "moon_knight"
+    assert conf >= 0.95
+
+
+def test_resolve_hero_typo_recovers() -> None:
+    """Typical Tesseract noise on the HERO field still resolves cleanly."""
+    display, slug, conf = resolve_hero("Squirre1 Girl")
+    assert display == "Squirrel Girl"
+    assert slug == "squirrel_girl"
+    assert conf > 0.7
+
+
+def test_resolve_hero_below_threshold_returns_none() -> None:
+    display, slug, _ = resolve_hero("ZZ Garbage Heroname")
+    assert display is None
+    assert slug is None
+
+
+def test_resolve_hero_blank_input_returns_none() -> None:
+    assert resolve_hero("") == (None, None, 0.0)
+    assert resolve_hero("   ") == (None, None, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +248,8 @@ def test_review_threshold_flags_low_top_fields_and_low_rows() -> None:
         slot="weapon",
         rarity="legendary",
         level=60,
-        base_effect="Precision Damage",
-        base_value=8300.0,
+        rating=7086,
+        base_effects=[BaseEffect(name="Precision Damage", value=8300.0)],
         extended_effects=[
             ExtendedEffect(stat_id="Total Output Boost", tier="S", value=4200.0, confidence=0.92),
             ExtendedEffect(stat_id="Boss Damage",        tier="A", value=1800.0, confidence=0.55),
@@ -192,9 +258,10 @@ def test_review_threshold_flags_low_top_fields_and_low_rows() -> None:
             "name": 0.9,
             "rarity": 0.9,
             "level": 0.4,            # below threshold
+            "rating": 0.9,
+            "hero": 0.9,
             "slot": 0.65,            # below threshold
-            "base_effect": 0.95,
-            "base_value": 0.95,
+            "base_effects": 0.95,
             "detection": 0.9,
         },
     )

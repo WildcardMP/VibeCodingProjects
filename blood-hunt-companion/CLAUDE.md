@@ -169,7 +169,7 @@ blood-hunt-companion/
 │   │   ├── services/           damage_calc, roll_score, forge_roi  (TODO Phase 3+)
 │   │   └── ocr/                detect, anchors, preprocess, parse, fuzzy,
 │   │                           rarity, templates, debug, pipeline
-│   └── tests/                  pytest suite (118+ passing)
+│   └── tests/                  pytest suite (164+ passing)
 │
 ├── apps/web/                   ← Next.js frontend                   (TODO Phase 3+)
 │

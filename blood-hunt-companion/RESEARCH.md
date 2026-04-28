@@ -176,17 +176,19 @@ Sources: [Rank 1 build video](https://www.youtube.com/watch?v=M_hmJqkdrFU), [NM 
 
 ### 3.1 Rarity → extended effect count
 
+In-game vocabulary (confirmed against user screenshots 2026-04-27 — earlier drafts of this doc used the wrong words):
+
 | Rarity | Color | Extended Effects | Notes |
 |---|---|---|---|
-| Common | White | 0 | Base stats only — smelt fodder |
-| Uncommon | Green | 1 | Smelt fodder past early NM |
+| Normal | White | 0 | Base stats only — smelt fodder |
+| Advanced | Green | 1 | Smelt fodder past early NM |
 | Rare | Blue | 2 | Bridge tier |
 | Epic | Purple | 3 | Required for early NM |
-| Legendary | Gold | 4 | Required for NM 50+; max stat rolls |
+| Legendary | Gold | up to 5 | Required for NM 50+; max stat rolls |
 
-**5 total stats** = 1 base effect + 4 extended effects on a Legendary item.
+**Up to 5 extended effects** on a Legendary, plus 1+ base effects (e.g. armor shows BOTH `Health` and `Armor Value` under BASE EFFECT). The tooltip's overall **rating** integer at the top (e.g. 7086 on a high-roll legendary) summarises the magnitudes across all five.
 
-Sources: [Blood Hunt wiki gear page](https://www.marvelrivalsbloodhunt.wiki/gear/Marvel-Rivals-Blood-Hunt-gear), [beginner guide video](https://www.youtube.com/watch?v=RGWbEsb-yZo).
+Sources: [Blood Hunt wiki gear page](https://www.marvelrivalsbloodhunt.wiki/gear/Marvel-Rivals-Blood-Hunt-gear), [beginner guide video](https://www.youtube.com/watch?v=RGWbEsb-yZo), user-captured tooltip screenshots (Moon Knight Runic Armor, rating 7086).
 
 ### 3.2 Extended effect tiers (D / C / B / A / S)
 

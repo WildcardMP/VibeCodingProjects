@@ -6,6 +6,9 @@ Zero external dependencies — these are unit-testable without Tesseract or Open
 from __future__ import annotations
 
 import re
+from typing import Literal
+
+TierLetter = Literal["S", "A", "B", "C", "D"]
 
 # Match "+8300%", "-12.5%", "1,250%", optionally surrounded by whitespace.
 # Tolerates Tesseract substituting "O" for "0" by allowing a stray O after digits;
@@ -13,6 +16,10 @@ import re
 _PERCENT_RE = re.compile(r"([+-]?\d{1,6}(?:[.,]\d+)?)\s*%")
 _LEVEL_RE = re.compile(r"L(?:e?v(?:el)?)?\s*\.?\s*(\d{1,3})", re.IGNORECASE)
 _RAW_NUMBER_RE = re.compile(r"([+-]?\d{1,6}(?:[.,]\d+)?)")
+_RATING_RE = re.compile(r"\b(\d{3,5})\b")
+# Tier brackets: in-game uses full-width 【 】 (U+3010 / U+3011); some screenshots
+# may render as ASCII [ ]. Strip both before matching the letter.
+_TIER_BRACKET_RE = re.compile(r"[【】\[\]\(\)<>{}|/\\\s.,:;_\-]+")
 
 # Common Tesseract confusions for digits in this UI font.
 # Note: deliberately exclude `l` → `1` because it would corrupt "lv" / "level".
@@ -81,6 +88,42 @@ def parse_level(raw: str) -> int | None:
     except ValueError:
         return None
     return v if 1 <= v <= 60 else None
+
+
+def parse_rating(raw: str) -> int | None:
+    """Extract the tooltip overall rating, e.g. "7086" → 7086.
+
+    The rating appears as a 3- to 5-digit integer near the top of the card,
+    sometimes with stray punctuation or color-code artefacts. We pick the first
+    plausible integer.
+    """
+    if not raw:
+        return None
+    cleaned = _fix_digits_only(raw)
+    m = _RATING_RE.search(cleaned)
+    if m is None:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def parse_tier_letter(raw: str) -> TierLetter | None:
+    """Pick a single S/A/B/C/D letter from arbitrary OCR output.
+
+    Handles the in-game full-width brackets `【S】` (U+3010 / U+3011) and ASCII
+    `[S]` indifferently — both bracket families and adjacent punctuation are
+    stripped before scanning for the first valid letter. Returns None when no
+    candidate letter survives the strip.
+    """
+    if not raw:
+        return None
+    cleaned = _TIER_BRACKET_RE.sub("", raw).upper()
+    for ch in cleaned:
+        if ch in {"S", "A", "B", "C", "D"}:
+            return ch  # type: ignore[return-value]
+    return None
 
 
 def extract_stat_name(raw: str) -> str:

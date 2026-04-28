@@ -3,14 +3,15 @@
 Every directory under `apps/api/tests/fixtures/ocr/fixture_*` must contain:
 
     screenshot.png   — a full-screen Marvel Rivals screenshot with a tooltip
-    expected.json    — ground-truth schema:
+    expected.json    — ground-truth schema (mirrors PHASE2_OCR_INPUTS.md):
         {
           "name": str | null,
           "slot": "weapon"|"armor"|"accessory"|"exclusive",
-          "rarity": "common"|"uncommon"|"rare"|"epic"|"legendary",
+          "rarity": "normal"|"advanced"|"rare"|"epic"|"legendary",
+          "hero": str,                    # in-game display name, e.g. "Moon Knight"
           "level": int,
-          "base_effect": str,
-          "base_value": float,
+          "rating": int,                  # tooltip overall rating, e.g. 7086
+          "base_effects": [{"name": str, "value": float}, ...],
           "extended_effects": [{"stat_id": str, "tier": "S".."D", "value": float}, ...]
         }
 
@@ -109,23 +110,44 @@ def _name_matches(expected: object, actual: object) -> bool:
     return fuzz.WRatio(str(expected), str(actual)) >= NAME_FUZZ_THRESHOLD
 
 
+def _compare_base_effects(
+    expected: list[dict[str, object]],
+    actual: list[dict[str, object]],
+) -> list[Mismatch]:
+    """Compare base-effect lists by stat name (order-insensitive)."""
+    out: list[Mismatch] = []
+    e_by_name = {str(e["name"]): e for e in expected}
+    a_by_name = {str(a["name"]): a for a in actual}
+    missing = sorted(set(e_by_name) - set(a_by_name))
+    extra = sorted(set(a_by_name) - set(e_by_name))
+    for name in missing:
+        out.append(Mismatch(f"base_effects[{name}]", "present", "missing"))
+    for name in extra:
+        out.append(Mismatch(f"base_effects[{name}]", "absent", "extra"))
+    for name in sorted(set(e_by_name) & set(a_by_name)):
+        ev = float(e_by_name[name]["value"])  # type: ignore[arg-type]
+        av = float(a_by_name[name]["value"])  # type: ignore[arg-type]
+        if not _within_tolerance(ev, av):
+            out.append(Mismatch(f"base_effects[{name}].value", ev, av))
+    return out
+
+
 def _compare(expected: dict[str, object], actual: dict[str, object]) -> list[Mismatch]:
     out: list[Mismatch] = []
-    for key in ("slot", "rarity"):
+    for key in ("slot", "rarity", "hero"):
         if expected.get(key) != actual.get(key):
             out.append(Mismatch(key, expected.get(key), actual.get(key)))
-    if expected.get("level") != actual.get("level"):
-        out.append(Mismatch("level", expected.get("level"), actual.get("level")))
+    for key in ("level", "rating"):
+        if expected.get(key) != actual.get(key):
+            out.append(Mismatch(key, expected.get(key), actual.get(key)))
     if not _name_matches(expected.get("name"), actual.get("name")):
         out.append(Mismatch("name", expected.get("name"), actual.get("name")))
-    if expected.get("base_effect") != actual.get("base_effect"):
-        out.append(
-            Mismatch("base_effect", expected.get("base_effect"), actual.get("base_effect"))
+    out.extend(
+        _compare_base_effects(
+            list(expected.get("base_effects", [])),  # type: ignore[arg-type]
+            list(actual.get("base_effects", [])),  # type: ignore[arg-type]
         )
-    ev = float(expected.get("base_value", 0))  # type: ignore[arg-type]
-    av = float(actual.get("base_value", 0))  # type: ignore[arg-type]
-    if not _within_tolerance(ev, av):
-        out.append(Mismatch("base_value", ev, av))
+    )
     out.extend(
         _compare_extended_effects(
             list(expected.get("extended_effects", [])),  # type: ignore[arg-type]
@@ -145,9 +167,12 @@ def _serialize_actual(parsed: object) -> dict[str, object]:
         "name": parsed.name,
         "slot": parsed.slot,
         "rarity": parsed.rarity,
+        "hero": parsed.hero,
         "level": parsed.level,
-        "base_effect": parsed.base_effect,
-        "base_value": parsed.base_value,
+        "rating": parsed.rating,
+        "base_effects": [
+            {"name": b.name, "value": b.value} for b in parsed.base_effects
+        ],
         "extended_effects": [
             {"stat_id": e.stat_id, "tier": e.tier, "value": e.value}
             for e in parsed.extended_effects

@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_session
 from ..models.gear import GearORM
-from ..schemas.gear import ExtendedEffect, GearPatch, GearPiece, ParsedGear
+from ..schemas.gear import BaseEffect, ExtendedEffect, GearPatch, GearPiece, ParsedGear
 
 log = logging.getLogger(__name__)
 
@@ -98,12 +98,16 @@ def update_gear(gear_id: int, patch: GearPatch, session: SessionDep) -> GearPiec
     if not changes:
         return orm.to_pydantic()
 
-    # `extended_effects` and `overall_confidence` map to differently-named columns;
-    # everything else is a 1:1 attribute set.
+    # JSON-backed list fields and the renamed confidence column need bespoke
+    # handling; everything else is a 1:1 attribute set.
     if "extended_effects" in changes:
         effects_raw = changes.pop("extended_effects")
         effects = [ExtendedEffect.model_validate(e) for e in (effects_raw or [])]
         orm.extended_effects_json = json.dumps([e.model_dump(mode="json") for e in effects])
+    if "base_effects" in changes:
+        base_raw = changes.pop("base_effects")
+        base = [BaseEffect.model_validate(e) for e in (base_raw or [])]
+        orm.base_effects_json = json.dumps([e.model_dump(mode="json") for e in base])
     if "overall_confidence" in changes:
         orm.ocr_confidence = changes.pop("overall_confidence")
 

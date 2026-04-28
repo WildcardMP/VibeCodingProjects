@@ -1,13 +1,14 @@
 """Stages 2 & 3 — Proportional anchors + row segmentation inside the card.
 
 Stage 2 (anchors): given a cropped tooltip card, return regions for the item
-name, rarity badge, level text, slot icon, base-effect row, and the
-extended-effects block. Regions are computed as **proportions of card
-dimensions** — no absolute pixels, no resolution coupling.
+name, rarity badge, level text, rating, hero name, slot icon, base-effects
+block, and the extended-effects block. Regions are computed as **proportions
+of card dimensions** — no absolute pixels, no resolution coupling.
 
 Stage 3 (row segmentation): given the extended-effects region, split it into
-0–4 individual rows by detecting horizontal whitespace gaps. The number of rows
-is detected, not assumed.
+0–5 individual rows by detecting horizontal whitespace gaps. The number of rows
+is detected, not assumed (per-rarity caps: normal 0, advanced 1, rare 2, epic 3,
+legendary up to 5).
 
 The proportions in `_PROPORTIONS` are the main tuning surface. They're sized to
 typical Marvel Rivals tooltip layouts and will be revisited once real fixtures
@@ -34,11 +35,17 @@ _PROPORTIONS: dict[str, tuple[float, float, float, float]] = {
     "rarity_badge":   (0.82, 0.04, 0.14, 0.10),
     # Level usually sits just under the name.
     "level":          (0.20, 0.14, 0.30, 0.06),
-    # Base-effect is the prominent row separating the name area from the list
-    # of extended effects. Roughly the band ~25–35% down the card.
-    "base_effect":    (0.05, 0.24, 0.90, 0.10),
+    # Tooltip overall rating (3–5 digit integer near the top, displayed in
+    # red/green text). Sits to the right of the name on legendaries.
+    "rating":         (0.55, 0.14, 0.40, 0.06),
+    # HERO field shows a portrait + the hero's display name to its right.
+    # The text region we OCR is to the right of the portrait icon.
+    "hero":           (0.20, 0.20, 0.70, 0.06),
+    # Base-effects block holds 1+ rows (e.g. Health AND Armor Value on armor).
+    # Roughly the band ~26–36% down the card.
+    "base_effects":   (0.05, 0.26, 0.90, 0.10),
     # Extended-effects block fills the bottom half, padded.
-    "extended_effects": (0.05, 0.36, 0.90, 0.55),
+    "extended_effects": (0.05, 0.38, 0.90, 0.55),
 }
 
 # Row segmentation thresholds.
@@ -74,7 +81,9 @@ class CardAnchors:
     slot_icon: Region
     rarity_badge: Region
     level: Region
-    base_effect: Region
+    rating: Region
+    hero: Region
+    base_effects: Region
     extended_effects: Region
 
 
@@ -112,7 +121,9 @@ def compute_anchors(card_bgr: Any) -> CardAnchors:
         slot_icon=_scale(_PROPORTIONS["slot_icon"], w, h),
         rarity_badge=_scale(_PROPORTIONS["rarity_badge"], w, h),
         level=_scale(_PROPORTIONS["level"], w, h),
-        base_effect=_scale(_PROPORTIONS["base_effect"], w, h),
+        rating=_scale(_PROPORTIONS["rating"], w, h),
+        hero=_scale(_PROPORTIONS["hero"], w, h),
+        base_effects=_scale(_PROPORTIONS["base_effects"], w, h),
         extended_effects=_scale(_PROPORTIONS["extended_effects"], w, h),
     )
 
@@ -126,7 +137,9 @@ def compute_anchors(card_bgr: Any) -> CardAnchors:
                 ("slot", anchors.slot_icon.bbox),
                 ("rarity", anchors.rarity_badge.bbox),
                 ("level", anchors.level.bbox),
-                ("base", anchors.base_effect.bbox),
+                ("rating", anchors.rating.bbox),
+                ("hero", anchors.hero.bbox),
+                ("base", anchors.base_effects.bbox),
                 ("ext", anchors.extended_effects.bbox),
             ],
         )
@@ -157,7 +170,7 @@ def segment_rows(extended_bgr: Any) -> list[tuple[int, int]]:
 
     Returns:
         A list of `(y_start, y_end)` tuples in region-local coordinates, in
-        top-to-bottom order. Empty list when no rows detected (e.g. common-tier
+        top-to-bottom order. Empty list when no rows detected (e.g. normal-tier
         gear with zero extended effects).
 
     The detection works on the binarised image: dark gaps between rows show up
@@ -196,8 +209,9 @@ def segment_rows(extended_bgr: Any) -> list[tuple[int, int]]:
     min_h = max(1, int(round(_MIN_ROW_HEIGHT_FRAC * region_h)))
     rows = [(y0, y1) for (y0, y1) in rows if (y1 - y0) >= min_h]
 
-    # Cap at 4 — Marvel Rivals legendary gear has at most 4 extended effects.
-    rows = rows[:4]
+    # Cap at 5 — Marvel Rivals legendary gear has up to 5 extended effects
+    # (rarity → count: normal 0, advanced 1, rare 2, epic 3, legendary up to 5).
+    rows = rows[:5]
 
     if debug.is_enabled():
         debug.dump_with_boxes(

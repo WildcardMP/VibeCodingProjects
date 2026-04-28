@@ -10,17 +10,18 @@ from datetime import UTC, datetime
 import pytest
 
 from app.models.gear import GearORM, cast_rarity, cast_slot
-from app.schemas.gear import ExtendedEffect, ParsedGear
+from app.schemas.gear import BaseEffect, ExtendedEffect, ParsedGear
 
 
 def _sample_parsed() -> ParsedGear:
     return ParsedGear(
         slot="weapon",
+        hero="Squirrel Girl",
         hero_id="squirrel_girl",
         rarity="legendary",
         level=60,
-        base_effect="Precision Damage",
-        base_value=8300.0,
+        rating=7086,
+        base_effects=[BaseEffect(name="Precision Damage", value=8300.0)],
         extended_effects=[
             ExtendedEffect(
                 stat_id="Total Output Boost", tier="S", value=4200.0,
@@ -47,11 +48,14 @@ def test_from_parsed_round_trip() -> None:
 
     assert piece.id == 42
     assert piece.slot == "weapon"
+    assert piece.hero == "Squirrel Girl"
     assert piece.hero_id == "squirrel_girl"
     assert piece.rarity == "legendary"
     assert piece.level == 60
-    assert piece.base_effect == "Precision Damage"
-    assert piece.base_value == 8300.0
+    assert piece.rating == 7086
+    assert len(piece.base_effects) == 1
+    assert piece.base_effects[0].name == "Precision Damage"
+    assert piece.base_effects[0].value == 8300.0
     assert piece.overall_confidence == 0.85
     assert piece.source_screenshot == "/tmp/x.png"
     assert piece.is_equipped is False
@@ -77,6 +81,28 @@ def test_extended_effects_json_is_valid() -> None:
     assert decoded[0]["tier"] == "S"
 
 
+def test_base_effects_json_round_trips() -> None:
+    """Multi-row base effects survive JSON encode/decode through the ORM."""
+    parsed = ParsedGear(
+        slot="armor",
+        rarity="legendary",
+        level=60,
+        rating=7086,
+        base_effects=[
+            BaseEffect(name="Health", value=2419.0),
+            BaseEffect(name="Armor Value", value=438.0),
+        ],
+    )
+    orm = GearORM.from_parsed(parsed)
+    orm.id = 1
+    orm.parsed_at = datetime(2026, 4, 27, tzinfo=UTC)
+    decoded = json.loads(orm.base_effects_json)
+    assert len(decoded) == 2
+    assert decoded[1] == {"name": "Armor Value", "value": 438.0}
+    piece = orm.to_pydantic()
+    assert [e.name for e in piece.base_effects] == ["Health", "Armor Value"]
+
+
 def test_load_extended_handles_empty_string() -> None:
     assert GearORM._load_extended("") == []
 
@@ -86,16 +112,25 @@ def test_load_extended_handles_non_list_blob() -> None:
     assert GearORM._load_extended('{"oops": true}') == []
 
 
+def test_load_base_handles_empty_string() -> None:
+    assert GearORM._load_base("") == []
+
+
+def test_load_base_handles_non_list_blob() -> None:
+    assert GearORM._load_base('{"oops": true}') == []
+
+
 def test_from_parsed_no_extended_effects() -> None:
     parsed = ParsedGear(
         slot="armor",
-        rarity="common",
+        rarity="normal",
         level=1,
-        base_effect="HP",
-        base_value=100.0,
+        base_effects=[BaseEffect(name="HP", value=100.0)],
     )
     orm = GearORM.from_parsed(parsed)
     assert orm.extended_effects_json == "[]"
+    assert orm.rating == 0
+    assert orm.hero is None
 
 
 def test_to_pydantic_handles_null_ocr_confidence() -> None:
@@ -123,7 +158,7 @@ def test_cast_slot_rejects_unknown() -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["common", "uncommon", "rare", "epic", "legendary"],
+    ["normal", "advanced", "rare", "epic", "legendary"],
 )
 def test_cast_rarity_accepts_known(value: str) -> None:
     assert cast_rarity(value) == value
@@ -132,3 +167,11 @@ def test_cast_rarity_accepts_known(value: str) -> None:
 def test_cast_rarity_rejects_unknown() -> None:
     with pytest.raises(ValueError, match="unknown rarity"):
         cast_rarity("mythic")
+
+
+def test_cast_rarity_rejects_old_vocabulary() -> None:
+    """`common` and `uncommon` are no longer valid (renamed 2026-04-27)."""
+    with pytest.raises(ValueError, match="unknown rarity"):
+        cast_rarity("common")
+    with pytest.raises(ValueError, match="unknown rarity"):
+        cast_rarity("uncommon")

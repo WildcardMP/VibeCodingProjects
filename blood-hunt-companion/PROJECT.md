@@ -55,9 +55,9 @@ The app reads only:
 
 ### F2 — Gear Roll Evaluator
 
-**Problem it solves:** I just rolled a chest piece with three extended effects. Is it leaderboard-grade or vendor trash?
+**Problem it solves:** I just rolled a chest piece with several extended effects (legendary gear can show up to 5). Is it leaderboard-grade or vendor trash?
 
-**Inputs:** A single piece of gear (parsed from screenshot OCR, or manually entered).
+**Inputs:** A single piece of gear (parsed from screenshot OCR, or manually entered). Each piece has 1+ base effects (e.g. armor shows BOTH `Health` and `Armor Value`), an in-game `rating` integer (e.g. 7086), and a `hero` binding.
 
 **Outputs:**
 - **Roll Score (0–100)** vs. theoretical maximum for that slot/hero/build.
@@ -241,15 +241,18 @@ blood-hunt-companion/
 -- Gear pieces owned by the player
 CREATE TABLE gear (
   id              INTEGER PRIMARY KEY,
-  slot            TEXT NOT NULL,            -- 'weapon' | 'armor' | 'accessory' | 'exclusive' (RESEARCH §3)
-  hero_id         TEXT,                     -- nullable: some gear is universal
-  rarity          TEXT NOT NULL,            -- 'common'|'uncommon'|'rare'|'epic'|'legendary'
-  level           INTEGER NOT NULL,
-  base_effect     TEXT NOT NULL,            -- name of base stat
-  base_value      REAL NOT NULL,
-  extended_effects_json TEXT NOT NULL,      -- [{stat, tier, value}, ...]
+  name            TEXT,                     -- in-game item name, e.g. "Runic Armor"
+  slot            TEXT NOT NULL,            -- 'weapon'|'armor'|'accessory'|'exclusive' (RESEARCH §3)
+  hero            TEXT,                     -- in-game hero display name, e.g. "Moon Knight"
+  hero_id         TEXT,                     -- canonical slug for joins, e.g. "moon_knight"
+  rarity          TEXT NOT NULL,            -- 'normal'|'advanced'|'rare'|'epic'|'legendary'
+  level           INTEGER NOT NULL,         -- 1..60 (cap matches hero level cap)
+  rating          INTEGER NOT NULL DEFAULT 0, -- tooltip overall rating, e.g. 7086
+  base_effects_json TEXT NOT NULL,          -- [{name, value}, ...] — 1+ base rows per piece
+  extended_effects_json TEXT NOT NULL,      -- [{stat_id, tier, value}, ...] — 0..5 rows per rarity
   source_screenshot TEXT,                   -- path to /data/screenshots/...
   ocr_confidence  REAL,
+  field_confidences_json TEXT NOT NULL DEFAULT '{}',
   parsed_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   is_equipped     BOOLEAN DEFAULT 0,
   notes           TEXT
@@ -281,6 +284,14 @@ CREATE TABLE runs (
 CREATE INDEX idx_runs_build ON runs(build_id);
 CREATE INDEX idx_gear_hero_slot ON gear(hero_id, slot);
 ```
+
+> **Vocabulary note (2026-04-27):** rarity values were renamed to match the
+> in-game subtitles confirmed against user-captured screenshots. Old `common`
+> → `normal`, old `uncommon` → `advanced`. Per-rarity extended-effect counts:
+> normal 0 / advanced 1 / rare 2 / epic 3 / legendary up to 5. Migration
+> `0003_vocabulary_corrections` renames any persisted values and folds the
+> previous scalar `base_effect` + `base_value` pair into the new
+> `base_effects_json` list (every gear piece has 1+ base effects).
 
 ---
 

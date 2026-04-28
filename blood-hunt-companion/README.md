@@ -143,7 +143,7 @@ The translator falls back to bundled `*.seed.json` files if a real export is mis
 
 ## Status
 
-Phase 2 partially landed: OCR pipeline (with dual-strategy tier detection + slot template matching) plus full gear CRUD persistence backed by Alembic-managed SQLite. **98 tests passing.**
+Phase 2 partially landed: OCR pipeline (with dual-strategy tier detection + slot template matching) plus full gear CRUD persistence backed by Alembic-managed SQLite. **164 tests passing** (the OCR-fixture accuracy gate stays skipped until user-supplied screenshots land; see PHASE2_OCR_INPUTS.md).
 
 Still pending in Phase 2 (per [`CLAUDE.md` §7.1](./CLAUDE.md)):
 - Real-screenshot OCR fixture suite (≥10 tooltips with hand-labeled `expected.json`).

@@ -250,10 +250,11 @@ Tune by inspecting `anchors/regions.png` against real fixtures.
 
 ### 2.4 Stage 3 — Row Segmentation
 
-`anchors.segment_rows` splits the extended-effects region into 0–4 row bands
+`anchors.segment_rows` splits the extended-effects region into 0–5 row bands
 by horizontal-projection minima. The number of rows is **detected**, not
-assumed — supports tooltips with 1, 2, 3, or 4 extended effects without
-prior knowledge of rarity.
+assumed — supports tooltips with 0, 1, 2, 3, 4, or 5 extended effects without
+prior knowledge of rarity (per-rarity caps: normal 0, advanced 1, rare 2,
+epic 3, legendary up to 5).
 
 Constants:
 - `_GRAY_INK_CUTOFF = 80` — pixel intensity ≥ this counts as "ink" (tooltip
@@ -262,19 +263,19 @@ Constants:
   are ink.
 - `_MIN_ROW_HEIGHT_FRAC = 0.06` — rows shorter than 6% of the region drop
   out as noise (single-pixel artefacts, separator lines, etc.).
-- Hard cap at 4 rows.
+- Hard cap at 5 rows.
 
 Inspect `anchors/rows.png` to verify the right number of rows and where
 they land.
 
 ### 2.5 Rarity Detection (Color-Based)
 
-Tooltips border / name color encodes rarity. Sample the rarity badge centroid and classify by HSV hue:
+Tooltips border / name color encodes rarity. Sample the rarity badge centroid and classify by HSV hue. Vocabulary matches the in-game subtitles confirmed against user screenshots on 2026-04-27 (`NORMAL ARMOR`, `ADVANCED WEAPON`, etc. — earlier drafts used `common`/`uncommon`):
 
 | Rarity | Hue range (approx) | Notes |
 |---|---|---|
-| Common (white) | low saturation, high value | Detect via `S < 30 && V > 200` |
-| Uncommon (green) | H ≈ 60° | |
+| Normal (white) | low saturation, high value | Detect via `S < 30 && V > 200` |
+| Advanced (green) | H ≈ 60° | |
 | Rare (blue) | H ≈ 220° | |
 | Epic (purple) | H ≈ 280° | |
 | Legendary (gold) | H ≈ 45°, high saturation | |
@@ -353,7 +354,11 @@ def parse_value(raw: str) -> float | None:
 
 Extended effect tiers (S/A/B/C/D, see RESEARCH.md §3.2) are tiny. Two strategies, run both and reconcile:
 
-1. **OCR with `TIER_CONFIG`** on the cropped tier badge.
+1. **OCR with `TIER_CONFIG`** on the cropped tier badge. The in-game UI wraps
+   the letter in **full-width brackets `【S】` (U+3010 / U+3011)**; some
+   screenshots may render as ASCII `[S]`. `app/ocr/parse.py::parse_tier_letter`
+   strips both bracket families plus adjacent punctuation before scanning for
+   the letter, so either form parses identically.
 2. **Template match** against pre-saved S/A/B/C/D tier-icon crops (`cv2.matchTemplate`, `TM_CCOEFF_NORMED`). More robust at small sizes.
 
 If both agree, confidence = 1.0. If only one, confidence = 0.65. If neither, surface to the user for manual correction. (0.65 keeps a single-method read inside the yellow band defined in CLAUDE.md §3.6 rather than landing on the yellow/red boundary.)
@@ -363,6 +368,10 @@ If both agree, confidence = 1.0. If only one, confidence = 0.65. If neither, sur
 `apps/api/app/schemas/gear.py`:
 
 ```python
+class BaseEffect(BaseModel):
+    name:       StatId           # e.g. "Health", "Armor Value"
+    value:      float            # numeric reading
+
 class ExtendedEffect(BaseModel):
     stat_id:    StatId           # canonical name, post-fuzzy
     tier:       TierLetter       # S/A/B/C/D
@@ -373,19 +382,20 @@ class ExtendedEffect(BaseModel):
 class ParsedGear(BaseModel):
     name:               str | None              # OCR'd item display name
     slot:               GearSlot
-    hero_id:            str | None
-    rarity:             Rarity
+    hero:               str | None              # in-game display name, e.g. "Moon Knight"
+    hero_id:            str | None              # canonical slug, e.g. "moon_knight"
+    rarity:             Rarity                  # normal|advanced|rare|epic|legendary
     level:              int = Field(ge=1, le=60)
-    base_effect:        StatId
-    base_value:         float
-    extended_effects:   list[ExtendedEffect]
+    rating:             int = Field(ge=0, default=0)  # tooltip overall rating
+    base_effects:       list[BaseEffect]        # 1+ rows; armor has Health AND Armor Value
+    extended_effects:   list[ExtendedEffect]    # max_length=5 (legendary cap)
     overall_confidence: float
     field_confidences:  dict[str, float]        # parallel dict — per-field 0..1
     source_screenshot:  str
 ```
 
 `field_confidences` carries the per-top-field confidences (`name`, `slot`,
-`rarity`, `level`, `base_effect`, `base_value`, `detection`). Per-row
+`rarity`, `level`, `rating`, `hero`, `base_effects`, `detection`). Per-row
 confidences live on each `ExtendedEffect.confidence`.
 
 ### 2.11 End-to-End Pipeline (`apps/api/app/ocr/pipeline.py`)

@@ -5,7 +5,8 @@ Unit-level checks on the math, not on real screenshots:
 - `compute_anchors` returns regions whose proportions match `_PROPORTIONS` and
   always fall inside the card.
 - `segment_rows` picks up the right number of text rows from synthetic strips
-  with known row positions, ignores rows that are too thin, and caps at 4 rows.
+  with known row positions, ignores rows that are too thin, and caps at 5 rows
+  (legendary gear has up to 5 extended effects).
 """
 
 from __future__ import annotations
@@ -53,7 +54,9 @@ def test_anchors_clip_to_card_bounds() -> None:
         anchors.slot_icon,
         anchors.rarity_badge,
         anchors.level,
-        anchors.base_effect,
+        anchors.rating,
+        anchors.hero,
+        anchors.base_effects,
         anchors.extended_effects,
     ):
         assert region.x >= 0
@@ -62,6 +65,18 @@ def test_anchors_clip_to_card_bounds() -> None:
         assert region.h >= 1
         assert region.x + region.w <= 40
         assert region.y + region.h <= 40
+
+
+def test_anchors_include_rating_and_hero_regions() -> None:
+    """The 2026-04-27 vocabulary corrections added rating + hero anchors."""
+    card = np.zeros((800, 400, 3), dtype=np.uint8)
+    anchors = compute_anchors(card)
+    # Rating sits in the top band.
+    assert 0 <= anchors.rating.y < 300
+    assert anchors.rating.w > 0 and anchors.rating.h > 0
+    # Hero band sits below name/level but above the base-effects block.
+    assert anchors.hero.y < anchors.base_effects.y
+    assert anchors.hero.w > 0 and anchors.hero.h > 0
 
 
 def test_anchors_rejects_non_bgr_input() -> None:
@@ -124,10 +139,24 @@ def test_segment_rows_handles_zero_size_input() -> None:
     assert segment_rows(empty) == []
 
 
-def test_segment_rows_caps_at_four() -> None:
-    strip = _strip_with_rows(6)  # six rows; should clip to 4
+def test_segment_rows_caps_at_five() -> None:
+    """Legendary gear has up to 5 extended effects (was 4 pre-2026-04-27).
+
+    Six rows in the strip — five must survive after the per-rarity cap.
+    Going higher exceeds `_MIN_ROW_HEIGHT_FRAC` (the strip grows linearly
+    with `n_rows` while the painted row stays at `row_h - 10` px tall) and
+    every row would get filtered out as noise.
+    """
+    strip = _strip_with_rows(6)  # six rows; should clip to 5
     rows = segment_rows(strip)
-    assert len(rows) == 4
+    assert len(rows) == 5
+
+
+def test_segment_rows_finds_five_rows_for_legendary() -> None:
+    """A legendary card with all 5 extended effects must surface every row."""
+    strip = _strip_with_rows(5)
+    rows = segment_rows(strip)
+    assert len(rows) == 5
 
 
 def test_segment_rows_filters_thin_noise() -> None:

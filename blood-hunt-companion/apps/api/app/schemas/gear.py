@@ -9,10 +9,18 @@ from pydantic import BaseModel, Field
 from .common import GearSlot, Rarity, StatId, TierLetter
 
 
+class BaseEffect(BaseModel):
+    """One row of "base effect" on a gear piece. Every piece has 1+ base effects
+    (e.g. armor shows BOTH Health and Armor Value under BASE EFFECT)."""
+
+    name: StatId
+    value: float
+
+
 class ExtendedEffect(BaseModel):
-    """One row of "extended effect" on a gear piece. Mid- and high-rarity pieces have
-    1–4 extended effects, each with an S–D tier and a numeric roll within the tier
-    range from `data/game/gear_stats.json`."""
+    """One row of "extended effect" on a gear piece. Counts are per-rarity:
+    normal 0, advanced 1, rare 2, epic 3, legendary up to 5. Each row has its own
+    S–D tier and a numeric roll within the tier range from `gear_stats.json`."""
 
     stat_id: StatId
     tier: TierLetter
@@ -34,12 +42,13 @@ class ParsedGear(BaseModel):
 
     name: str | None = None  # item display name from OCR (nullable until ground truth lands)
     slot: GearSlot
-    hero_id: str | None = None  # nullable: some legendaries are universal
+    hero: str | None = None  # in-game hero display name, e.g. "Moon Knight"
+    hero_id: str | None = None  # canonical slug for DB joins, e.g. "moon_knight"
     rarity: Rarity
     level: int = Field(ge=1, le=60)  # cap matches hero level cap (RESEARCH §3.6)
-    base_effect: StatId
-    base_value: float
-    extended_effects: list[ExtendedEffect] = Field(default_factory=list, max_length=4)
+    rating: int = Field(ge=0, default=0)  # tooltip overall rating, e.g. 7086
+    base_effects: list[BaseEffect] = Field(default_factory=list)
+    extended_effects: list[ExtendedEffect] = Field(default_factory=list, max_length=5)
     overall_confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     field_confidences: dict[str, float] = Field(default_factory=dict)
     source_screenshot: str = ""
@@ -64,11 +73,12 @@ class GearPatch(BaseModel):
 
     name: str | None = None
     slot: str | None = None
+    hero: str | None = None
     hero_id: str | None = None
     rarity: str | None = None
     level: int | None = Field(default=None, ge=1, le=60)
-    base_effect: str | None = None
-    base_value: float | None = None
+    rating: int | None = Field(default=None, ge=0)
+    base_effects: list[BaseEffect] | None = None
     extended_effects: list[ExtendedEffect] | None = None
     overall_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     source_screenshot: str | None = None

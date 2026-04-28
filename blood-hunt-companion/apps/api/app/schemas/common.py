@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from typing import Literal
 
-# Five rarities, mirroring RESEARCH.md §3.1.
-Rarity = Literal["common", "uncommon", "rare", "epic", "legendary"]
+# Five rarities, mirroring RESEARCH.md §3.1. Names match the in-game subtitles
+# (NORMAL ARMOR / ADVANCED WEAPON / RARE / EPIC / LEGENDARY) confirmed against
+# user-captured screenshots on 2026-04-27.
+Rarity = Literal["normal", "advanced", "rare", "epic", "legendary"]
 
 # Extended-effect tier letters from RESEARCH.md §3.2.
 TierLetter = Literal["S", "A", "B", "C", "D"]

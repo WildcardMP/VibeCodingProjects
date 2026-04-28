@@ -7,7 +7,8 @@ Pipeline (per 2026-04-27 architectural pivot, see PROJECT.md §9 Phase 2):
     Stage 3 — `anchors.segment_rows`         : whitespace-based row segmentation.
     Stage 4 — `_extract_row` (this module)   : OCR each row, fuzzy-match label,
                                                 template-match tier.
-    Stage 5 — `_extract_top` (this module)   : item name, rarity, level, slot.
+    Stage 5 — `_extract_top` (this module)   : item name, rarity, level, slot,
+                                                rating, hero, multi-row base effects.
     Stage 6 — `_assemble` (this module)      : build ParsedGear + field_confidences.
 
 Position-based stat identification is gone. **Stat identity comes from the
@@ -27,12 +28,19 @@ from typing import Any
 
 from ..config import settings
 from ..schemas.common import GearSlot, Rarity, TierLetter
-from ..schemas.gear import ExtendedEffect, ParsedGear
+from ..schemas.gear import BaseEffect, ExtendedEffect, ParsedGear
 from .anchors import CardAnchors, Region, compute_anchors, crop, segment_rows
 from .debug import dump_image
 from .detect import DetectedCard, TooltipNotFound, crop_card, detect_tooltip
 from .fuzzy import normalize_stat
-from .parse import extract_stat_name, parse_level, parse_percent
+from .heroes import HERO_DISPLAY_NAMES, slug_for_hero
+from .parse import (
+    extract_stat_name,
+    parse_level,
+    parse_percent,
+    parse_rating,
+    parse_tier_letter,
+)
 from .preprocess import preprocess_for_tesseract
 from .rarity import classify_rarity_by_color
 from .templates import match_slot, match_tier
@@ -55,6 +63,10 @@ _TIER_CONF_NONE = 0.0
 # Fallback slot when nothing identifies one (template match miss + no heuristic
 # hit on the base effect). Frontend will flag low confidence.
 _DEFAULT_SLOT: GearSlot = "armor"
+
+# Fuzzy-match threshold for hero display names. Hero name OCR is short and
+# usually clean, so we can be strict.
+_HERO_FUZZ_THRESHOLD = 80.0
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +109,11 @@ class TopOfCard:
     name: str | None
     rarity: Rarity
     level: int
+    rating: int
     slot: GearSlot
-    base_effect: str
-    base_value: float
+    hero: str | None
+    hero_id: str | None
+    base_effects: list[BaseEffect]
     field_confidences: dict[str, float]
 
 
@@ -133,17 +147,6 @@ def _read_image(path: str) -> Any:
 # ---------------------------------------------------------------------------
 # Tier reconciliation (Tesseract + template match)
 # ---------------------------------------------------------------------------
-def _classify_tier_letter(text: str) -> TierLetter | None:
-    """Pick a single S/A/B/C/D letter from Tesseract output."""
-    if not text:
-        return None
-    cleaned = "".join(ch for ch in text if ch.isalpha()).upper()
-    for ch in cleaned:
-        if ch in {"S", "A", "B", "C", "D"}:
-            return ch  # type: ignore[return-value]
-    return None
-
-
 def resolve_tier(
     tier_crop: Any,
     tesseract_text: str,
@@ -156,8 +159,11 @@ def resolve_tier(
     - Only one method has a hit → confidence 0.65 (yellow band).
     - Methods disagree → trust the template match, confidence 0.65.
     - Neither → (None, 0.0); caller defaults the row tier and flags red.
+
+    Tesseract output is normalised through `parse_tier_letter`, which strips
+    full-width 【】 and ASCII [] brackets the in-game UI wraps the letter in.
     """
-    tess_letter = _classify_tier_letter(tesseract_text)
+    tess_letter = parse_tier_letter(tesseract_text)
     tdir = templates_dir if templates_dir is not None else _tier_templates_dir()
     tmpl_result = match_tier(tier_crop, tdir)
     tmpl_letter = tmpl_result[0] if tmpl_result else None
@@ -187,6 +193,8 @@ _BASE_TO_SLOT: dict[str, GearSlot] = {
     "Total Damage Bonus": "armor",
     "Rune Cooldown Reduction": "armor",
     "HP": "armor",
+    "Health": "armor",
+    "Armor Value": "armor",
     "Precision Damage": "weapon",
     "Precision Rate": "weapon",
     "Crit Damage": "weapon",
@@ -198,14 +206,19 @@ _BASE_TO_SLOT: dict[str, GearSlot] = {
 }
 
 
-def _heuristic_slot(base_effect: str) -> GearSlot:
-    return _BASE_TO_SLOT.get(base_effect, _DEFAULT_SLOT)
+def _heuristic_slot(base_effects: list[BaseEffect]) -> GearSlot:
+    """Map the first recognized base-effect name to its most common slot."""
+    for effect in base_effects:
+        slot = _BASE_TO_SLOT.get(effect.name)
+        if slot is not None:
+            return slot
+    return _DEFAULT_SLOT
 
 
 def resolve_slot(
     card_bgr: Any,
     anchors: CardAnchors,
-    base_effect: str,
+    base_effects: list[BaseEffect],
     *,
     templates_dir: Path | None = None,
 ) -> tuple[GearSlot, float]:
@@ -221,7 +234,29 @@ def resolve_slot(
     match = match_slot(slot_crop, sdir)
     if match is not None:
         return match
-    return _heuristic_slot(base_effect), 0.5
+    return _heuristic_slot(base_effects), 0.5
+
+
+# ---------------------------------------------------------------------------
+# Hero resolution (OCR text → fuzzy match against canonical roster)
+# ---------------------------------------------------------------------------
+def resolve_hero(raw_text: str) -> tuple[str | None, str | None, float]:
+    """Fuzzy-match an OCR'd hero name against the canonical roster.
+
+    Returns `(display_name, hero_id, confidence)`. Display name is the
+    canonical in-game form (e.g. "Moon Knight"); `hero_id` is the slug
+    (e.g. "moon_knight"). Both are None when no name is confidently matched.
+    """
+    if not raw_text or not raw_text.strip():
+        return None, None, 0.0
+    cleaned = raw_text.strip()
+    matched, score = normalize_stat(
+        cleaned, list(HERO_DISPLAY_NAMES), threshold=_HERO_FUZZ_THRESHOLD
+    )
+    confidence = min(score / 100.0, 1.0)
+    if matched in HERO_DISPLAY_NAMES:
+        return matched, slug_for_hero(matched), confidence
+    return None, None, confidence
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +316,54 @@ def _extract_row(
 # ---------------------------------------------------------------------------
 # Stage 5 — top-of-card extraction
 # ---------------------------------------------------------------------------
+def _extract_base_effects(
+    card_bgr: Any,
+    region: Region,
+    stat_catalog: list[str],
+) -> tuple[list[BaseEffect], float]:
+    """OCR every visible row in the base-effects block.
+
+    Returns the parsed effects plus a mean fuzzy-match score across all rows
+    (0..1). The base-effects block holds 1+ rows on every gear piece (e.g.
+    armor shows BOTH `Health +X` and `Armor Value +Y`).
+    """
+    base_crop = crop(card_bgr, region)
+    bands = segment_rows(base_crop)
+
+    if not bands:
+        # Nothing segmented — fall back to a single OCR pass on the full block
+        # so we still get *something* even with the row detector misaligned.
+        raw = _ocr(preprocess_for_tesseract(base_crop), _TEXT_CONFIG)
+        stat_name, stat_score = normalize_stat(extract_stat_name(raw), stat_catalog)
+        value = parse_percent(raw) or 0.0
+        if not stat_name:
+            return [], 0.0
+        return [BaseEffect(name=stat_name, value=value)], min(stat_score / 100.0, 1.0)
+
+    import numpy as np
+
+    arr = np.asarray(base_crop)
+    region_w = arr.shape[1] if arr.ndim >= 2 else 0
+    effects: list[BaseEffect] = []
+    scores: list[float] = []
+    for y0, y1 in bands:
+        row_img = arr[y0:y1, :region_w]
+        if row_img.size == 0:
+            continue
+        raw = _ocr(preprocess_for_tesseract(row_img), _TEXT_CONFIG)
+        if not raw.strip():
+            continue
+        stat_name, stat_score = normalize_stat(extract_stat_name(raw), stat_catalog)
+        value = parse_percent(raw) or 0.0
+        if not stat_name:
+            continue
+        effects.append(BaseEffect(name=stat_name, value=value))
+        scores.append(min(stat_score / 100.0, 1.0))
+
+    mean_score = sum(scores) / len(scores) if scores else 0.0
+    return effects, mean_score
+
+
 def _extract_top(
     card_bgr: Any,
     anchors: CardAnchors,
@@ -300,25 +383,30 @@ def _extract_top(
     level = parse_level(level_raw) or 1
     level_conf = 0.9 if parse_level(level_raw) is not None else 0.4
 
-    base_raw = _ocr(
-        preprocess_for_tesseract(crop(card_bgr, anchors.base_effect)), _TEXT_CONFIG
+    rating_raw = _ocr(preprocess_for_tesseract(crop(card_bgr, anchors.rating)), _NUM_CONFIG)
+    rating_value = parse_rating(rating_raw)
+    rating = rating_value or 0
+    rating_conf = 0.9 if rating_value is not None else 0.4
+
+    hero_raw = _ocr(preprocess_for_tesseract(crop(card_bgr, anchors.hero)), _TEXT_CONFIG)
+    hero, hero_id, hero_conf = resolve_hero(hero_raw)
+
+    base_effects, base_conf = _extract_base_effects(
+        card_bgr, anchors.base_effects, stat_catalog
     )
-    base_name_raw = extract_stat_name(base_raw)
-    base_effect, base_score = normalize_stat(base_name_raw, stat_catalog)
-    base_value = parse_percent(base_raw) or 0.0
-    base_conf = min(base_score / 100.0, 1.0)
 
     slot, slot_conf = resolve_slot(
-        card_bgr, anchors, base_effect, templates_dir=slot_templates
+        card_bgr, anchors, base_effects, templates_dir=slot_templates
     )
 
     confidences = {
         "name": name_conf,
         "rarity": rarity_conf,
         "level": level_conf,
+        "rating": rating_conf,
+        "hero": hero_conf,
         "slot": slot_conf,
-        "base_effect": base_conf,
-        "base_value": base_conf,  # value confidence shares the row OCR's score
+        "base_effects": base_conf,
         "detection": detection_confidence,
     }
 
@@ -326,9 +414,11 @@ def _extract_top(
         name=name,
         rarity=rarity,
         level=level,
+        rating=rating,
         slot=slot,
-        base_effect=base_effect,
-        base_value=base_value,
+        hero=hero,
+        hero_id=hero_id,
+        base_effects=base_effects,
         field_confidences=confidences,
     )
 
@@ -338,7 +428,7 @@ def _extract_top(
 # ---------------------------------------------------------------------------
 def _assemble(
     image_path: str,
-    hero_id: str | None,
+    hero_id_override: str | None,
     top: TopOfCard,
     rows: list[ExtractedRow],
 ) -> ParsedGear:
@@ -358,14 +448,18 @@ def _assemble(
     all_scores = list(top.field_confidences.values()) + [r.overall() for r in rows]
     overall = sum(all_scores) / len(all_scores) if all_scores else 0.0
 
+    # Caller-supplied hero_id wins over OCR; OCR-derived hero_id is the fallback.
+    resolved_hero_id = hero_id_override if hero_id_override is not None else top.hero_id
+
     return ParsedGear(
         name=top.name,
         slot=top.slot,
-        hero_id=hero_id,
+        hero=top.hero,
+        hero_id=resolved_hero_id,
         rarity=top.rarity,
         level=top.level,
-        base_effect=top.base_effect,
-        base_value=top.base_value,
+        rating=top.rating,
+        base_effects=top.base_effects,
         extended_effects=extended,
         overall_confidence=overall,
         field_confidences=top.field_confidences,
@@ -389,7 +483,7 @@ def parse_gear_screenshot(
     Args:
         image_path: filesystem path to the screenshot.
         stat_catalog: list of canonical stat display names from `gear_stats.json`.
-        hero_id: optional pre-known hero id; passed through to the result so the
+        hero_id: optional pre-known hero id; overrides OCR-derived hero_id so the
             simulator and roll-evaluator can use hero-specific scoring.
         tier_templates_dir: override for tier-badge PNGs (defaults to
             `data/game/_assets/tier_badges/`).
@@ -435,9 +529,10 @@ def parse_gear_screenshot(
 
     parsed = _assemble(image_path, hero_id, top, rows)  # Stage 6
     log.info(
-        "parsed gear: name=%s slot=%s rarity=%s level=%d base=%s ext=%d overall=%.2f",
-        parsed.name, parsed.slot, parsed.rarity, parsed.level,
-        parsed.base_effect, len(parsed.extended_effects), parsed.overall_confidence,
+        "parsed gear: name=%s slot=%s rarity=%s level=%d rating=%d hero=%s base=%d ext=%d overall=%.2f",
+        parsed.name, parsed.slot, parsed.rarity, parsed.level, parsed.rating,
+        parsed.hero, len(parsed.base_effects), len(parsed.extended_effects),
+        parsed.overall_confidence,
     )
     return parsed
 
@@ -473,6 +568,7 @@ __all__ = [
     "TopOfCard",
     "fields_below_review_threshold",
     "parse_gear_screenshot",
+    "resolve_hero",
     "resolve_slot",
     "resolve_tier",
 ]

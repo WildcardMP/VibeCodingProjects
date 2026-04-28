@@ -65,11 +65,12 @@ def client(db_sm: sessionmaker[Session]) -> Iterator[TestClient]:
 def _sample_payload(**overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "slot": "weapon",
+        "hero": "Squirrel Girl",
         "hero_id": "squirrel_girl",
         "rarity": "legendary",
         "level": 60,
-        "base_effect": "Precision Damage",
-        "base_value": 8300.0,
+        "rating": 7086,
+        "base_effects": [{"name": "Precision Damage", "value": 8300.0}],
         "extended_effects": [
             {
                 "stat_id": "Total Output Boost",
@@ -141,7 +142,10 @@ def test_filter_by_slot(client: TestClient) -> None:
     client.post("/api/gear/manual", json=_sample_payload(slot="weapon"))
     client.post(
         "/api/gear/manual",
-        json=_sample_payload(slot="armor", base_effect="HP", base_value=1500.0),
+        json=_sample_payload(
+            slot="armor",
+            base_effects=[{"name": "HP", "value": 1500.0}],
+        ),
     )
     r = client.get("/api/gear", params={"slot": "armor"})
     assert len(r.json()) == 1
@@ -205,7 +209,7 @@ def test_patch_partial_update_notes(client: TestClient) -> None:
     assert r.status_code == 200
     assert r.json()["notes"] == "BiS for SG"
     # Other fields untouched.
-    assert r.json()["base_effect"] == "Precision Damage"
+    assert r.json()["base_effects"][0]["name"] == "Precision Damage"
 
 
 def test_patch_overall_confidence_maps_to_ocr_confidence_column(
@@ -238,7 +242,7 @@ def test_patch_empty_body_noop(client: TestClient) -> None:
     created = client.post("/api/gear/manual", json=_sample_payload()).json()
     r = client.patch(f"/api/gear/{created['id']}", json={})
     assert r.status_code == 200
-    assert r.json()["base_effect"] == "Precision Damage"
+    assert r.json()["base_effects"][0]["name"] == "Precision Damage"
 
 
 def test_patch_404(client: TestClient) -> None:

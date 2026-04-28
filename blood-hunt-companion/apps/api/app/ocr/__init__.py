@@ -24,7 +24,8 @@ are heavy native dependencies; lazy imports keep unit tests cheap.
 from .anchors import CardAnchors, segment_rows
 from .detect import DetectedCard, TooltipNotFound, detect_tooltip
 from .fuzzy import normalize_stat
-from .parse import parse_level, parse_percent
+from .heroes import HERO_DISPLAY_NAMES, HERO_SLUGS, slug_for_hero
+from .parse import parse_level, parse_percent, parse_rating, parse_tier_letter
 from .pipeline import parse_gear_screenshot
 from .preprocess import preprocess_for_tesseract
 from .rarity import classify_rarity_by_color
@@ -32,6 +33,8 @@ from .rarity import classify_rarity_by_color
 __all__ = [
     "CardAnchors",
     "DetectedCard",
+    "HERO_DISPLAY_NAMES",
+    "HERO_SLUGS",
     "TooltipNotFound",
     "classify_rarity_by_color",
     "detect_tooltip",
@@ -39,6 +42,9 @@ __all__ = [
     "parse_gear_screenshot",
     "parse_level",
     "parse_percent",
+    "parse_rating",
+    "parse_tier_letter",
     "preprocess_for_tesseract",
     "segment_rows",
+    "slug_for_hero",
 ]
