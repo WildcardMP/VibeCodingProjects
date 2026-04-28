@@ -105,11 +105,13 @@ Same process as tier badges, but for slot icons. Slots are: `weapon`, `armor`, `
 Aim to hit all of these across your 10+ fixtures:
 
 - [ ] At least one of each slot: weapon, armor, accessory, exclusive
-- [ ] At least one of each tier: S, A, B, C, D
+- [ ] At least one of each rarity: normal, advanced, rare, epic, legendary
+- [ ] At least one of each per-row tier: S, A, B, C, D (legendaries are best for hitting multiple in one fixture)
+- [ ] At least two different heroes (so the `hero` extraction gets exercised)
 - [ ] A mix of tooltip positions on screen (some left, some right, some center)
-- [ ] At least one item with a long or unusual name (stress-tests fuzzy matching)
+- [ ] At least one item with a long stat name (e.g., `"Health restored per/s during Restorative Respire"`)
 - [ ] At least one tooltip with the busiest possible game world behind it (stress-tests detection)
-- [ ] At least one tooltip with stats in clearly different orders (e.g., one weapon shows Attack Power on row 1, another shows it on row 3) — this is the whole point of content-based identification
+- [ ] At least one tooltip with stats in clearly different orders (same stat appearing on different rows in different fixtures) — this is the whole point of content-based identification
 
 ### What to do for each fixture
 
@@ -123,37 +125,51 @@ Aim to hit all of these across your 10+ fixtures:
 
 ```json
 {
-  "name": "Mjolnir Fragment",
-  "slot": "weapon",
+  "name": "Runic Armor",
+  "slot": "armor",
   "rarity": "legendary",
+  "hero": "Moon Knight",
   "level": 60,
-  "base_effect": "Precision Damage",
-  "base_value": 8300,
+  "rating": 7086,
+  "base_effects": [
+    {"name": "Health", "value": 2419},
+    {"name": "Armor Value", "value": 438}
+  ],
   "extended_effects": [
-    {"stat_id": "Total Output Boost", "tier": "S", "value": 4200},
-    {"stat_id": "Boss Damage", "tier": "A", "value": 1800},
-    {"stat_id": "Crit Rate", "tier": "B", "value": 8.5}
+    {"stat_id": "Health", "tier": "S", "value": 1450},
+    {"stat_id": "Health restored per/s during Restorative Respire", "tier": "S", "value": 360},
+    {"stat_id": "Block Rate", "tier": "A", "value": 15.4},
+    {"stat_id": "Health", "tier": "A", "value": 94},
+    {"stat_id": "Healing Rune Cooldown Reduction", "tier": "A", "value": 69}
   ]
 }
 ```
 
 **Field rules:**
 
-- `name` — exact item name as shown in-game (case-sensitive)
-- `slot` — one of: `"weapon"`, `"armor"`, `"accessory"`, `"exclusive"` (lowercase)
-- `rarity` — one of: `"common"`, `"uncommon"`, `"rare"`, `"epic"`, `"legendary"` (lowercase). This is the **item's overall rarity**, indicated by the tooltip border color. Determines how many extended effects the item has (legendaries get up to 4).
+- `name` — exact item name as shown in-game, top of tooltip in large text (case-sensitive, e.g., `"Runic Armor"`)
+- `slot` — one of: `"weapon"`, `"armor"`, `"accessory"`, `"exclusive"` (lowercase). Read from the tooltip subtitle (e.g., `LEGENDARY ARMOR` → slot is `armor`).
+- `rarity` — one of: `"normal"`, `"advanced"`, `"rare"`, `"epic"`, `"legendary"` (lowercase). Read from the tooltip subtitle. Determines border color and number of extended effects.
+- `hero` — the hero this gear belongs to, exact in-game name (e.g., `"Moon Knight"`, `"Squirrel Girl"`). Each piece of gear is bound to a specific hero. Read from the HERO field on the tooltip.
 - `level` — integer, no quotes (cap is 60)
-- `base_effect` — name of the item's base/main effect (the headline stat at the top of the tooltip)
-- `base_value` — numeric value of the base effect
-- `extended_effects` — array of `{stat_id, tier, value}`, in the order they appear on screen (top to bottom). The number of entries depends on rarity (legendaries up to 4, lower rarities fewer).
+- `rating` — integer, the overall numeric rating shown at the top of the tooltip (e.g., `7086`)
+- `base_effects` — array of `{name, value}` entries, in the order they appear on screen (top to bottom). Every piece of gear has multiple base effects (e.g., armor has both Health and Armor Value).
+  - `name` — the stat label exactly as shown
+  - `value` — numeric value (use a decimal for percentages, e.g., `12.7` for 12.7%)
+- `extended_effects` — array of `{stat_id, tier, value}`, in the order they appear on screen (top to bottom). The number of entries depends on rarity:
+  - **Normal:** 0 extended effects
+  - **Advanced:** 1
+  - **Rare:** 2
+  - **Epic:** 3
+  - **Legendary:** up to 5
   - `stat_id` — the stat label exactly as shown in-game
-  - `tier` — **per-row tier**, one of `"S"`, `"A"`, `"B"`, `"C"`, `"D"`. This is the magnitude band of *that specific rolled stat*, NOT the item's overall rarity.
-  - `value` — numeric value of the rolled stat. Use a decimal for percentages (e.g., `8.5` for 8.5%).
+  - `tier` — **per-row tier**, one of `"S"`, `"A"`, `"B"`, `"C"`, `"D"`. This is the magnitude band of *that specific rolled stat*, NOT the item's overall rarity. In-game, this appears in full-width brackets like `【S】`, `【A】`, etc.
+  - `value` — numeric value of the rolled stat. Use a decimal for percentages.
 
 **Two important distinctions:**
 
 1. **Rarity ≠ Tier.** `rarity` is the item's color/border (legendary, epic, etc.). `tier` is the S/A/B/C/D grade of an individual extended-effect roll. A legendary item can have a D-tier roll on it.
-2. **Order matters.** List `extended_effects` in the order they appear on screen, top to bottom. The pipeline doesn't care about position when *identifying* stats (it uses content), but order is needed so tests can verify the pipeline reported them in the correct visual order.
+2. **Order matters.** List `base_effects` and `extended_effects` in the order they appear on screen, top to bottom. The pipeline doesn't care about position when *identifying* stats (it uses content), but order is needed so tests can verify the pipeline reported them in the correct visual order.
 
 ### Validating your JSON
 
