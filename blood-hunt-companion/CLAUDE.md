@@ -166,10 +166,11 @@ blood-hunt-companion/
 │   │   ├── schemas/            Pydantic models (gear, hero, trait, arcana, run)
 │   │   ├── models/             SQLAlchemy ORM (GearORM)
 │   │   ├── routers/            FastAPI route modules (gear CRUD)
-│   │   ├── services/           damage_calc, roll_score, forge_roi  (TODO Phase 3+)
+│   │   ├── services/           stat_aggregator, damage_calc (Phase 3 F1 ✓)
+│   │   │                       roll_score, forge_roi  (TODO Phase 4)
 │   │   └── ocr/                detect, anchors, preprocess, parse, fuzzy,
 │   │                           rarity, templates, debug, pipeline
-│   └── tests/                  pytest suite (164+ passing)
+│   └── tests/                  pytest suite (197+ passing)
 │
 ├── apps/web/                   ← Next.js frontend                   (TODO Phase 3+)
 │
@@ -228,7 +229,7 @@ Postgres, Redis, a message queue, or any cloud service.
 
 ---
 
-## 7. Active Focus — Phase 2: Calibration-Free OCR + Persistence
+## 7. Active Focus — Phase 2 (OCR tuning, awaiting user images) + Phase 3 backend MVP landed
 
 **Architectural pivot (2026-04-27):** OCR is calibration-free and content-based.
 See `PROJECT.md` §9 Phase 2 and `PHASE2_OCR_INPUTS.md` for the rationale and the
@@ -236,9 +237,16 @@ user-side capture guide. The pipeline auto-detects the tooltip card on a
 full-screen screenshot, anchors structural regions by **proportion** of the
 detected card, and identifies stats by **fuzzy-matched OCR text**, not position.
 
-**Goal:** the user takes any full-screen screenshot at any resolution; ≥9 of 10
-fixtures parse cleanly without manual correction. Gear persists to SQLite via
-`POST /api/gear/manual`. Frontend not required this phase.
+**Phase 2 goal:** the user takes any full-screen screenshot at any resolution;
+≥9 of 10 fixtures parse cleanly without manual correction. Gear persists to
+SQLite via `POST /api/gear/manual`. Frontend not required this phase.
+
+**Phase 3 backend MVP (2026-04-29):** the F1 Damage Simulator backend has
+landed. `POST /api/simulate` accepts `(hero_id, gear, trait_alloc, arcana_ids,
+target)` and returns per-ability `expected_hit` + `dps` plus the aggregated
+`StatTotals`. Pure-Python services (`stat_aggregator`, `damage_calc`) cover SG
++ MK abilities from the seed catalog. Frontend (`apps/web/`) and Phase 4
+(Roll Evaluator + Forge ROI) are still pending.
 
 ### 7.1 — Acceptance criteria (Definition of Done for Phase 2)
 
@@ -257,6 +265,12 @@ Code-side (Claude can do without user input):
       to a base-effect heuristic when templates are missing.
 - [x] `make test` green, `make lint` green, `make api` boots clean. Test count
       grows past 110 with the new OCR module tests; aim higher as fixtures land.
+      (197 passing as of Phase 3 backend MVP.)
+- [x] **Phase 3 F1 backend MVP.** `app/services/{stat_aggregator,damage_calc}.py`
+      + `routers/simulation.py` + `POST /api/simulate`. Formula matches
+      PROJECT.md §11. Independent precision/crit channels per RESEARCH.md §3.4.
+      Calibration TODOs from RESEARCH.md §6.5 carried as comments in
+      `damage_calc.py` for the next tuning pass.
 
 User-side (gated on captures per PHASE2_OCR_INPUTS.md):
 
@@ -285,8 +299,10 @@ Tuning (Claude does this once user-side inputs land):
 
 ### 7.3 — Out of scope for Phase 2
 
-- Damage simulator (Phase 3).
-- Forge ROI calculator (Phase 4).
+- ~~Damage simulator (Phase 3).~~ **Backend MVP landed 2026-04-29** —
+  see §7.1 above. Phase 3 frontend (Simulator page in `apps/web/`) is still
+  out of scope until Phase 2 image work completes.
+- Roll Evaluator + Forge ROI calculator (Phase 4).
 - Run logger UI (Phase 5).
 - Any frontend work beyond a curl-friendly API.
 

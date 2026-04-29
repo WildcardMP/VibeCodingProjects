@@ -23,6 +23,7 @@ from .data_loader import load_game_data, stat_catalog
 from .ocr.detect import TooltipNotFound
 from .ocr.pipeline import parse_gear_screenshot
 from .routers import gear as gear_router
+from .routers import simulation as simulation_router
 from .schemas.gear import ParsedGear
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -46,6 +47,7 @@ app.add_middleware(
 # Persistence routers. Migrations (`make migrate`) own schema creation; this
 # module never touches `Base.metadata.create_all`.
 app.include_router(gear_router.router)
+app.include_router(simulation_router.router)
 
 
 @app.get("/api/health")

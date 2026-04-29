@@ -10,10 +10,18 @@ from .common import GearSlot, Rarity, StatId, TierLetter
 from .gear import BaseEffect, ExtendedEffect, GearPatch, GearPiece, ParsedGear
 from .hero import Ability, AbilityScaling, Hero
 from .run import Build, Run
+from .simulation import (
+    AbilityResult,
+    SimulationRequest,
+    SimulationResult,
+    StatTotals,
+    TargetContext,
+)
 from .trait import TraitEffect, TraitNode
 
 __all__ = [
     "Ability",
+    "AbilityResult",
     "AbilityScaling",
     "ArcanaScroll",
     "BaseEffect",
@@ -26,7 +34,11 @@ __all__ = [
     "ParsedGear",
     "Rarity",
     "Run",
+    "SimulationRequest",
+    "SimulationResult",
     "StatId",
+    "StatTotals",
+    "TargetContext",
     "TierLetter",
     "TraitEffect",
     "TraitNode",
