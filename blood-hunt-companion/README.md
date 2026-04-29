@@ -129,6 +129,18 @@ make migrate-revision m="add runs table"
 
 Migrations live in [`apps/api/alembic/versions/`](./apps/api/alembic/versions/). Schema changes follow the cascade in [`CLAUDE.md` §8.2](./CLAUDE.md): Pydantic → SQLAlchemy → Alembic → generated TS types → frontend.
 
+## Continuous integration
+
+Every push to `main` and every PR runs the same triad you'd run locally:
+
+```
+ruff check apps/api tools
+mypy app                      (strict, in apps/api)
+pytest apps/api/tests
+```
+
+The workflow lives at [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) (at the repo root, since `blood-hunt-companion/` is a subdirectory of the parent repo). It runs on `ubuntu-latest` against Python 3.11 — the floor declared in `apps/api/pyproject.toml`. Tesseract isn't installed on the runner, so the OCR-fixture tests skip cleanly via `pytest.importorskip` (matching local behavior when fixtures or screenshots aren't ready). A failing CI build blocks merge; fix lint or test breakage before pushing.
+
 ## Game-data refresh (per patch)
 
 ```bash
