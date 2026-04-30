@@ -1,4 +1,4 @@
-"""Gear CRUD endpoints.
+"""Gear CRUD + scoring endpoints.
 
 The OCR ingest endpoint (`POST /api/gear/ingest`) lives in `main.py` because it
 predates this router; it returns a `ParsedGear` *without* persisting. The flow is:
@@ -9,8 +9,10 @@ predates this router; it returns a `ParsedGear` *without* persisting. The flow i
     4. GET  /api/gear/{id}    → single piece
     5. PATCH /api/gear/{id}   → edit fields
     6. DELETE /api/gear/{id}  → remove
+    7. POST /api/gear/score   → Phase 4 F2 roll evaluator (stateless, no DB)
 
-The router is purely transport — Pydantic ↔ ORM conversion lives on the model.
+The router is purely transport — Pydantic ↔ ORM conversion lives on the model
+for CRUD; scoring math lives in `services.roll_score`.
 """
 
 from __future__ import annotations
@@ -23,9 +25,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..data_loader import load_game_data
 from ..db import get_session
 from ..models.gear import GearORM
 from ..schemas.gear import BaseEffect, ExtendedEffect, GearPatch, GearPiece, ParsedGear
+from ..schemas.roll_score import RollScoreRequest, RollScoreResult
+from ..services.roll_score import (
+    UnknownAbilityError,
+    UnknownHeroError,
+    compute_roll_score,
+)
 
 log = logging.getLogger(__name__)
 
@@ -126,3 +135,41 @@ def delete_gear(gear_id: int, session: SessionDep) -> None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"gear {gear_id} not found")
     session.delete(orm)
     log.info("gear deleted id=%s", gear_id)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/gear/score — Phase 4 F2 Gear Roll Evaluator (stateless)
+# ---------------------------------------------------------------------------
+@router.post("/score", response_model=RollScoreResult)
+def score_gear(req: RollScoreRequest) -> RollScoreResult:
+    """Score a single gear roll against a build context. Stateless — no DB.
+
+    Returns 422 when:
+    - ``BuildContext.hero_id`` doesn't match a hero in the catalog.
+    - ``BuildContext.ability_id`` is provided but doesn't match any of that
+      hero's abilities.
+    - ``gear.extended_effects`` is empty AND ``gear.rarity != "normal"``.
+      That's a parsing artefact, not a valid roll — normal-rarity pieces
+      legitimately have zero rolls and score as ``trash`` / ``smelt``.
+    """
+    if req.gear.rarity != "normal" and not req.gear.extended_effects:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"{req.gear.rarity!r} gear must have at least one extended effect",
+        )
+
+    data = load_game_data()
+    try:
+        result = compute_roll_score(req.gear, req.build, game_data=data)
+    except UnknownHeroError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except UnknownAbilityError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+
+    log.info(
+        "scored gear: rarity=%s score=%.1f threshold=%s forge=%s "
+        "rows=%d uncatalogued=%d",
+        req.gear.rarity, result.score, result.threshold, result.forge_action,
+        len(result.breakdown), len(result.uncatalogued_stats),
+    )
+    return result

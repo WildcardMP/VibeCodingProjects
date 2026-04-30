@@ -102,6 +102,7 @@ curl -X DELETE http://localhost:8000/api/gear/42
 | `GET`  | `/api/gear/{id}` | Single piece or 404 |
 | `PATCH`| `/api/gear/{id}` | Partial update; `extended_effects` replaces the whole list when present |
 | `DELETE`| `/api/gear/{id}` | 204 on success, 404 otherwise |
+| `POST` | `/api/gear/score` | Roll evaluator (Phase 4 F2): `(gear, build)` → 0–100 score + threshold tier + forge action; stateless |
 | `POST` | `/api/simulate` | Damage simulator (Phase 3 F1): `(hero, gear, traits, arcana, target)` → per-ability DPS + aggregated `StatTotals` |
 
 ## OCR ingest setup
@@ -156,10 +157,10 @@ The translator falls back to bundled `*.seed.json` files if a real export is mis
 
 ## Status
 
-Phase 2 partially landed: OCR pipeline (with dual-strategy tier detection + slot template matching) plus full gear CRUD persistence backed by Alembic-managed SQLite. **Phase 3 F1 (Damage Simulator) backend MVP also landed** — `POST /api/simulate` scores any `(hero, gear, traits, arcana, target)` combo against the formula in PROJECT.md §11. **197 tests passing** (the OCR-fixture accuracy gate stays skipped until user-supplied screenshots land; see PHASE2_OCR_INPUTS.md).
+Phase 2 partially landed: OCR pipeline (with dual-strategy tier detection + slot template matching) plus full gear CRUD persistence backed by Alembic-managed SQLite. **Phase 3 F1 (Damage Simulator) backend** also landed — `POST /api/simulate`. **Phase 4 F2 (Gear Roll Evaluator) backend landed 2026-04-29** — `POST /api/gear/score` returns a 0–100 score, threshold tier (`trash`…`leaderboard_grade`), and a forge action (`smelt`/`use_temporarily`/`keep`/`reroll_low_tiers`/`lock`) for any single gear piece against an explicit or hero-derived stat-weight build context. **237 tests passing** (the OCR-fixture accuracy gate stays skipped until user-supplied screenshots land; see PHASE2_OCR_INPUTS.md).
 
 Still pending in Phase 2 (per [`CLAUDE.md` §7.1](./CLAUDE.md)):
 - Real-screenshot OCR fixture suite (≥10 tooltips with hand-labeled `expected.json`).
 - User-supplied tier-badge / slot-icon PNGs under `data/game/_assets/`.
 
-Next: F2 Roll Evaluator + F4 Forge ROI (Phase 4 services), then F3 Run Logger (Phase 5), then the Next.js frontend in `apps/web/`. See [`PROJECT.md` §9](./PROJECT.md#9-phased-build-plan) for the full plan.
+Next backend chunks: real Monte-Carlo percentile for F2 (current placeholder = score itself), F4 Forge ROI (Phase 4), F3 Run Logger (Phase 5). Frontend (Next.js in `apps/web/`) lands after backend feature set is complete. See [`PROJECT.md` §9](./PROJECT.md#9-phased-build-plan) for the full plan.

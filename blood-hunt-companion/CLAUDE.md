@@ -167,10 +167,11 @@ blood-hunt-companion/
 │   │   ├── models/             SQLAlchemy ORM (GearORM)
 │   │   ├── routers/            FastAPI route modules (gear CRUD)
 │   │   ├── services/           stat_aggregator, damage_calc (Phase 3 F1 ✓)
-│   │   │                       roll_score, forge_roi  (TODO Phase 4)
+│   │   │                       roll_score (Phase 4 F2 ✓)
+│   │   │                       forge_roi  (TODO Phase 4 F4)
 │   │   └── ocr/                detect, anchors, preprocess, parse, fuzzy,
 │   │                           rarity, templates, debug, pipeline
-│   └── tests/                  pytest suite (197+ passing)
+│   └── tests/                  pytest suite (237+ passing)
 │
 ├── apps/web/                   ← Next.js frontend                   (TODO Phase 3+)
 │
@@ -271,6 +272,12 @@ Code-side (Claude can do without user input):
       PROJECT.md §11. Independent precision/crit channels per RESEARCH.md §3.4.
       Calibration TODOs from RESEARCH.md §6.5 carried as comments in
       `damage_calc.py` for the next tuning pass.
+- [x] **Phase 4 F2 backend (Gear Roll Evaluator).** `app/services/roll_score.py`
+      + `routers/gear.py::score_gear` + `POST /api/gear/score`. Returns 0–100
+      score, threshold (`trash`…`leaderboard_grade`), forge action, per-row
+      breakdown, and the resolved stat-weight map. Stateless. V1 percentile
+      placeholder = score itself; real Monte-Carlo distribution is a
+      follow-up (PROJECT.md §3 F2).
 
 User-side (gated on captures per PHASE2_OCR_INPUTS.md):
 
@@ -302,7 +309,8 @@ Tuning (Claude does this once user-side inputs land):
 - ~~Damage simulator (Phase 3).~~ **Backend MVP landed 2026-04-29** —
   see §7.1 above. Phase 3 frontend (Simulator page in `apps/web/`) is still
   out of scope until Phase 2 image work completes.
-- Roll Evaluator + Forge ROI calculator (Phase 4).
+- ~~F2 Roll Evaluator (Phase 4).~~ **Backend landed 2026-04-29** —
+  `POST /api/gear/score`. F4 Forge ROI calculator still pending.
 - Run logger UI (Phase 5).
 - Any frontend work beyond a curl-friendly API.
 

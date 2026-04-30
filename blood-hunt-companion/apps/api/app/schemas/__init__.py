@@ -9,6 +9,14 @@ from .arcana import ArcanaScroll
 from .common import GearSlot, Rarity, StatId, TierLetter
 from .gear import BaseEffect, ExtendedEffect, GearPatch, GearPiece, ParsedGear
 from .hero import Ability, AbilityScaling, Hero
+from .roll_score import (
+    BuildContext,
+    ForgeAction,
+    RollScoreRequest,
+    RollScoreResult,
+    StatBreakdown,
+    ThresholdTier,
+)
 from .run import Build, Run
 from .simulation import (
     AbilityResult,
@@ -26,19 +34,25 @@ __all__ = [
     "ArcanaScroll",
     "BaseEffect",
     "Build",
+    "BuildContext",
     "ExtendedEffect",
+    "ForgeAction",
     "GearPatch",
     "GearPiece",
     "GearSlot",
     "Hero",
     "ParsedGear",
     "Rarity",
+    "RollScoreRequest",
+    "RollScoreResult",
     "Run",
     "SimulationRequest",
     "SimulationResult",
+    "StatBreakdown",
     "StatId",
     "StatTotals",
     "TargetContext",
+    "ThresholdTier",
     "TierLetter",
     "TraitEffect",
     "TraitNode",
